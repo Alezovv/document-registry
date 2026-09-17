@@ -1,0 +1,136 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Python caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# PyInstaller / build
+# =========================
+build/
+dist/
+release/
+
+*.pyc
+*.pyo
+
+# Keep packaging sources
+!packaging/
+!packaging/DocumentRegistry.spec
+!packaging/build.ps1
+
+# =========================
+# Runtime application data
+# =========================
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/*.sqlite3
+
+data/documents/
+data/parser_cache/
+
+# User-specific learned corrections
+data/parser_corrections.json
+
+# =========================
+# Backups
+# =========================
+backups/
+backup/
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+
+# PDF / OCR temporary files
+*_highlighted.pdf
+*_preview.pdf
+
+# =========================
+# Logs / diagnostics
+# =========================
+*.log
+logs/
+diagnostics/
+
+# =========================
+# Update system
+# =========================
+update_temp/
+updates/
+*.update
+*.sig
+
+# NEVER commit private signing keys
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+*.code-workspace
+
+# =========================
+# Windows
+# =========================
+Thumbs.db
+Thumbs.db:encryptable
+Desktop.ini
+$RECYCLE.BIN/
+
+# =========================
+# macOS
+# =========================
+.DS_Store
+
+# =========================
+# Test/runtime artifacts
+# =========================
+test_output/
+test_results/
+coverage/
+*.prof
+
+# =========================
+# Local archive / release files
+# =========================
+*.zip
+*.7z
+*.rar

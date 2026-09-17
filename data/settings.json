@@ -1,0 +1,6 @@
+{
+    "documents_dir": "@runtime/data/documents",
+    "confirm_delete": true,
+    "last_page": "registry",
+    "performance_mode": "auto"
+}

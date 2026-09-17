@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Callable
+
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QApplication
+
+from app.diagnostics_service import DiagnosticsService
+
+logger = logging.getLogger(__name__)
+
+
+class DiagnosticsController:
+    """UI actions for diagnostics, kept out of the MainWindow application shell."""
+
+    def __init__(
+        self,
+        service: DiagnosticsService,
+        logs_dir: str | Path,
+        toast: Callable[[str, str, str], None],
+        settings_page_provider: Callable[[], object | None],
+    ) -> None:
+        self.service = service
+        self.logs_dir = Path(logs_dir)
+        self.toast = toast
+        self.settings_page_provider = settings_page_provider
+
+    def _set_message(self, message: str, ok: bool) -> None:
+        page = self.settings_page_provider()
+        if page is not None:
+            page.set_diagnostics_message(message, ok)
+
+    def check_state(self) -> None:
+        try:
+            result = self.service.check_state()
+            self._set_message(result.summary, result.ok)
+            self.toast(
+                "Проверка состояния",
+                result.summary,
+                "success" if result.ok else "warning",
+            )
+        except Exception as error:
+            logger.exception("Ошибка проверки состояния")
+            message = f"Проверка не выполнена: {error}"
+            self._set_message(message, False)
+            self.toast("Диагностика", message, "warning")
+
+    def create_package(self) -> None:
+        try:
+            result = self.service.create_package()
+            self._set_message(result.summary, True)
+            self.toast("Диагностический пакет", result.summary, "success")
+        except Exception as error:
+            logger.exception("Ошибка создания диагностического пакета")
+            message = f"Не удалось создать пакет: {error}"
+            self._set_message(message, False)
+            self.toast("Диагностика", message, "warning")
+
+    def open_logs_folder(self) -> None:
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.logs_dir))):
+            self.toast("Логи", f"Папка логов: {self.logs_dir}", "warning")
+
+    def copy_info(self) -> None:
+        try:
+            QApplication.clipboard().setText(self.service.copyable_summary())
+            message = "Технические сведения скопированы в буфер обмена."
+            self._set_message(message, True)
+            self.toast("Диагностика", "Технические сведения скопированы.", "success")
+        except Exception as error:
+            logger.exception("Не удалось скопировать диагностические сведения")
+            self.toast(
+                "Диагностика",
+                f"Не удалось скопировать сведения: {error}",
+                "warning",
+            )
