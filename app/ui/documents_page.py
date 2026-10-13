@@ -63,6 +63,8 @@ class DocumentsPage(QWidget):
         title_layout.addWidget(description)
 
         title_container = QWidget()
+        title_container.setObjectName('titleContainer')
+        title_container.setStyleSheet('QWidget#titleContainer { background-color: transparent; }')
         title_container.setLayout(title_layout)
         title_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         header.addWidget(title_container, 1)
@@ -154,6 +156,8 @@ class DocumentsPage(QWidget):
     @staticmethod
     def _build_empty_state():
         container = QWidget()
+        container.setObjectName('emptyStateContainer')
+        container.setStyleSheet('QWidget#emptyStateContainer { background-color: transparent; }')
         layout = QVBoxLayout(container)
         layout.setContentsMargins(20, 35, 20, 45)
         layout.setSpacing(8)

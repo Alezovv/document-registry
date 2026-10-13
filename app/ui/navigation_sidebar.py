@@ -70,6 +70,7 @@ class NavigationSidebar(QFrame):
             ("registry", "▤", "Реестр"),
             ("documents", "▱", "Документы"),
             ("history", "◷", "История"),
+            ("shahmatka", "▦", "Шахматка"),
             ("settings", "⚙", "Настройки"),
         ):
             button = self._create_button(icon, text)

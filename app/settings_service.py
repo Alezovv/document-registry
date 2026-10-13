@@ -19,6 +19,7 @@ class AppSettings:
     confirm_delete: bool = True
     last_page: str = "registry"
     performance_mode: str = "auto"
+    update_source_dir: str = ""
 
 
 class SettingsService:
@@ -107,11 +108,13 @@ class SettingsService:
         if last_page not in VALID_PAGES:
             last_page = defaults.last_page
         performance_mode = normalize_performance_mode(raw.get("performance_mode"))
+        update_source_dir = str(raw.get("update_source_dir") or "").strip()
         settings = AppSettings(
             documents_dir=str(documents_path),
             confirm_delete=confirm_delete,
             last_page=last_page,
             performance_mode=performance_mode,
+            update_source_dir=update_source_dir,
         )
 
         # Rewrite legacy absolute default paths into their portable form once.
@@ -127,6 +130,7 @@ class SettingsService:
         payload = asdict(settings)
         payload["documents_dir"] = self._encode_path(payload.get("documents_dir") or self.default_documents_dir)
         payload["performance_mode"] = normalize_performance_mode(payload.get("performance_mode"))
+        payload["update_source_dir"] = str(payload.get("update_source_dir") or "").strip()
 
         temp_path: Path | None = None
         try:

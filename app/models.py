@@ -23,6 +23,8 @@ class Request:
     status: str = "Новый"
     source_document: str = ""
     is_pinned: bool = False
+    source_sha256: str = ""
+    source_size_bytes: int = 0
 
     @staticmethod
     def _parse_date(value: str) -> date | None:

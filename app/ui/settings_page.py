@@ -18,18 +18,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app import __version__
 from app.performance_diagnostics import format_memory
 from app.resource_profile import PERFORMANCE_MODE_LABELS, normalize_performance_mode
+from app.update_config import UPDATE_DRIVE_FOLDER_URL
 from app.ui.date_controls import NoWheelComboBox
 from app.ui.styles import PRIMARY_COLOR, PRIMARY_HOVER
 from app.ui.widgets import create_card
 
 
 class SettingsPage(QWidget):
-    save_requested = Signal(str, bool, str)
+    save_requested = Signal(str, bool, str, str)
+    update_check_requested = Signal(str)
+    rollback_requested = Signal(str)
+    ocr_check_requested = Signal()
     backup_requested = Signal()
     restore_requested = Signal()
     legacy_import_requested = Signal()
+    diagnostics_center_requested = Signal()
     state_check_requested = Signal()
     diagnostic_package_requested = Signal()
     open_logs_requested = Signal()
@@ -44,6 +50,7 @@ class SettingsPage(QWidget):
         performance_diagnostics=None,
         performance_mode: str = "auto",
         auto_backup_path: str | Path | None = None,
+        update_source_dir: str | Path = "",
         parent=None,
     ):
         super().__init__(parent)
@@ -52,8 +59,9 @@ class SettingsPage(QWidget):
         self.performance_diagnostics = performance_diagnostics
         self.performance_mode = normalize_performance_mode(performance_mode)
         self.auto_backup_path = Path(auto_backup_path) if auto_backup_path else None
+        self.update_source_dir = str(update_source_dir or "").strip()
         self._diagnostic_labels: dict[str, QLabel] = {}
-        self._build_ui(Path(documents_dir), confirm_delete)
+        self._build_ui(Path(documents_dir), confirm_delete, self.update_source_dir)
 
         self._diagnostics_timer = QTimer(self)
         self._diagnostics_timer.setInterval(3000)
@@ -62,7 +70,7 @@ class SettingsPage(QWidget):
         self.refresh_storage_info()
         self.refresh_performance_info()
 
-    def _build_ui(self, documents_dir: Path, confirm_delete: bool):
+    def _build_ui(self, documents_dir: Path, confirm_delete: bool, update_source_dir: str):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -71,6 +79,8 @@ class SettingsPage(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget(scroll)
+        content.setObjectName('settingsContent')
+        content.setStyleSheet('QWidget#settingsContent { background-color: transparent; }')
         root = QVBoxLayout(content)
         root.setContentsMargins(0, 0, 8, 0)
         root.setSpacing(16)
@@ -159,6 +169,85 @@ class SettingsPage(QWidget):
         backup_layout.addLayout(backup_buttons)
         root.addWidget(backup_card)
 
+        update_card = create_card()
+        update_layout = QVBoxLayout(update_card)
+        update_layout.setContentsMargins(22, 20, 22, 20)
+        update_layout.setSpacing(10)
+        update_title = self._section_title("Обновления и управление версиями")
+        update_hint = QLabel(
+            "Основной режим: программа сама проверяет обновления вперёд в публичной папке Google Drive "
+            "при запуске и затем раз в час. Дополнительно доступен откат на предыдущие версии с выбором "
+            "сборки, просмотром её описания и автоматическим сохранением текущей базы данных."
+        )
+        update_hint.setWordWrap(True)
+        update_hint.setStyleSheet("color:#667085; font-size:12px;")
+        update_layout.addWidget(update_title)
+        update_layout.addWidget(update_hint)
+
+        update_source = QLabel(
+            f'<a href="{UPDATE_DRIVE_FOLDER_URL}">Открыть папку обновлений Google Drive</a>'
+            " · ссылка встроена в программу"
+        )
+        update_source.setOpenExternalLinks(True)
+        update_source.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        update_source.setStyleSheet("color:#475467; font-size:11px;")
+        update_layout.addWidget(update_source)
+
+        # Backward-compatible hidden field: older settings.json may still contain
+        # update_source_dir, but v1.18.4+ no longer needs a local Drive folder.
+        self.update_source_path = QLineEdit(update_source_dir)
+        self.update_source_path.hide()
+
+        update_actions = QHBoxLayout()
+        update_actions.setSpacing(10)
+        self.update_version_label = QLabel(f"Установлена версия {__version__}")
+        self.update_version_label.setStyleSheet("color:#344054; font-size:12px; font-weight:650;")
+
+        self.check_update_button = QPushButton("Проверить обновления")
+        self.check_update_button.setMinimumHeight(40)
+        self.check_update_button.setStyleSheet(
+            f"QPushButton {{ background-color:{PRIMARY_COLOR}; color:white; border:none; "
+            "border-radius:10px; padding:8px 16px; font-weight:700; } "
+            f"QPushButton:hover {{ background-color:{PRIMARY_HOVER}; }} "
+            "QPushButton:pressed { background-color:#1E40AF; }"
+        )
+        self.check_update_button.setToolTip("Основной режим: проверить наличие более новой версии и обновиться вперёд")
+        self.check_update_button.clicked.connect(
+            lambda: self.update_check_requested.emit(self.update_source_path.text().strip())
+        )
+
+        self.rollback_button = QPushButton("Откат на старую версию")
+        self.rollback_button.setMinimumHeight(40)
+        self.rollback_button.setStyleSheet(self._secondary_button_style())
+        self.rollback_button.setToolTip(
+            "Дополнительная функция: выбрать более старую версию, посмотреть её описание и выполнить откат с сохранением текущей БД"
+        )
+        self.rollback_button.clicked.connect(
+            lambda: self.rollback_requested.emit(self.update_source_path.text().strip())
+        )
+
+        update_actions.addWidget(self.update_version_label)
+        update_actions.addStretch()
+        update_actions.addWidget(self.check_update_button)
+        update_actions.addWidget(self.rollback_button)
+        update_layout.addLayout(update_actions)
+
+        ocr_check_row = QHBoxLayout()
+        ocr_check_row.setSpacing(10)
+        ocr_check_hint = QLabel(
+            "После обновления можно отдельно проверить, что PaddleOCR, его pipeline и внешние модели запускаются корректно."
+        )
+        ocr_check_hint.setWordWrap(True)
+        ocr_check_hint.setStyleSheet("color:#667085; font-size:11px;")
+        check_ocr = QPushButton("Проверить OCR")
+        check_ocr.setMinimumHeight(40)
+        check_ocr.setStyleSheet(self._secondary_button_style())
+        check_ocr.clicked.connect(self.ocr_check_requested.emit)
+        ocr_check_row.addWidget(ocr_check_hint, 1)
+        ocr_check_row.addWidget(check_ocr)
+        update_layout.addLayout(ocr_check_row)
+        root.addWidget(update_card)
+
         legacy_card = create_card()
         legacy_layout = QVBoxLayout(legacy_card)
         legacy_layout.setContentsMargins(22, 20, 22, 20)
@@ -244,8 +333,11 @@ class SettingsPage(QWidget):
             ("cpu", "Процессор"),
             ("system_ram", "Оперативная память"),
             ("app_ram", "Память приложения"),
+            ("peak_ram", "Пиковая память"),
+            ("ram_budget", "Лимит RAM"),
             ("app_cpu", "CPU приложения"),
             ("memory_mode", "Режим памяти"),
+            ("memory_pressure", "Давление памяти"),
         )
         for index, (key, label) in enumerate(metrics):
             tile, value_label = self._diagnostic_tile(label)
@@ -298,6 +390,7 @@ class SettingsPage(QWidget):
         diagnostics_buttons = QHBoxLayout()
         diagnostics_buttons.setSpacing(10)
         for text, signal in (
+            ("Открыть центр диагностики", self.diagnostics_center_requested),
             ("Проверить состояние", self.state_check_requested),
             ("Создать диагностический пакет", self.diagnostic_package_requested),
             ("Открыть папку логов", self.open_logs_requested),
@@ -367,6 +460,7 @@ class SettingsPage(QWidget):
                 self.documents_path.text().strip(),
                 self.confirm_delete.isChecked(),
                 str(self.performance_mode_combo.currentData() or "auto"),
+                self.update_source_path.text().strip(),
             )
         )
         interface_layout.addWidget(interface_title)
@@ -417,9 +511,9 @@ class SettingsPage(QWidget):
             return
         mode = str(self.performance_mode_combo.currentData() or "auto")
         descriptions = {
-            "economy": "Минимальная фоновая нагрузка: 1 OCR-поток и экономное удержание временной памяти.",
-            "auto": "Рекомендуется: приложение само выбирает нагрузку по CPU и объёму RAM.",
-            "performance": "Больше OCR-потоков и быстрый кэш памяти. Полезно при серии сканов.",
+            "economy": "Строгий бюджет памяти: 1 OCR-поток, цель до ~1 ГБ RAM, выгрузка OCR при давлении памяти и последовательные тяжёлые задачи.",
+            "auto": "Рекомендуется: на ПК примерно с 4 ГБ RAM автоматически включается политика экономного режима; на более мощных системах лимиты мягче.",
+            "performance": "Больше OCR-потоков и быстрый кэш памяти. Используйте только когда системе хватает RAM.",
         }
         suffix = " Применяется сразу после сохранения настроек."
         self.performance_mode_hint.setText(descriptions.get(mode, descriptions["auto"]) + suffix)
@@ -432,16 +526,29 @@ class SettingsPage(QWidget):
             self.documents_path.setText(folder)
             self.documents_path.setToolTip(folder)
 
+    def _choose_update_folder(self):
+        start = self.update_source_path.text().strip() or str(Path.home())
+        folder = QFileDialog.getExistingDirectory(
+            self, "Выберите папку обновлений Google Drive", start
+        )
+        if folder:
+            self.update_source_path.setText(folder)
+            self.update_source_path.setToolTip(folder)
+
     def set_values(
         self,
         documents_dir: str | Path,
         confirm_delete: bool,
         performance_mode: str | None = None,
+        update_source_dir: str | Path | None = None,
     ):
         path = str(Path(documents_dir).resolve())
         self.documents_path.setText(path)
         self.documents_path.setToolTip(path)
         self.confirm_delete.setChecked(confirm_delete)
+        if update_source_dir is not None:
+            # Retained only for API compatibility with old settings pages.
+            self.update_source_path.setText("")
         if performance_mode is not None:
             self.performance_mode = normalize_performance_mode(performance_mode)
             index = self.performance_mode_combo.findData(self.performance_mode)
@@ -491,6 +598,11 @@ class SettingsPage(QWidget):
         self._diagnostic_labels["cpu"].setText(f"{snapshot.logical_cpus} лог. потоков")
         self._diagnostic_labels["system_ram"].setText(system_ram)
         self._diagnostic_labels["app_ram"].setText(format_memory(snapshot.process_ram_bytes))
+        self._diagnostic_labels["peak_ram"].setText(format_memory(snapshot.process_peak_ram_bytes))
+        self._diagnostic_labels["ram_budget"].setText(
+            format_memory(snapshot.memory_budget_bytes) if snapshot.memory_budget_bytes else "Без жёсткого лимита"
+        )
+        self._diagnostic_labels["memory_pressure"].setText(snapshot.memory_pressure)
         self._diagnostic_labels["app_cpu"].setText(f"{snapshot.process_cpu_percent:.1f} %")
         self._diagnostic_labels["ocr_threads"].setText(str(snapshot.ocr_threads))
         self._diagnostic_labels["ocr_dpi"].setText(

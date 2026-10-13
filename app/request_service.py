@@ -14,6 +14,9 @@ from app.document_service import (
     TrashStats,
 )
 from app.models import Request
+from app.document_fingerprint import DocumentFingerprintService
+from app.document_parser import PARSER_VERSION
+from app.parser_review import compact_parser_diagnostics
 from app.parser_correction_memory import ParserCorrectionMemory
 
 
@@ -37,31 +40,44 @@ class RequestService:
             self.database, self.database.documents_dir
         )
         self.parser_corrections = ParserCorrectionMemory.for_data_dir(self.database.data_dir)
+        self.fingerprints = DocumentFingerprintService(self.documents)
+
+    @staticmethod
+    def _release_transient_import_payload(request: Request) -> None:
+        """Drop OCR/parser-only attributes once SQLite has persisted them."""
+        for name in ("_ocr_text", "_parser_diagnostics"):
+            try:
+                delattr(request, name)
+            except AttributeError:
+                pass
 
     def get_requests(self) -> list[Request]:
         return self.database.get_requests()
+
+    def query_requests_page(self, **kwargs):
+        return self.database.query_requests_page(**kwargs)
+
+    def get_registry_status_counts(self) -> dict[str, int]:
+        return self.database.get_registry_status_counts()
 
     def get_form_suggestions(self, limit: int = 200) -> dict[str, list[str]]:
         suggestions = self.database.get_distinct_request_values(limit=limit)
         return self.parser_corrections.merge_suggestions(suggestions)
 
-    def apply_parser_corrections(self, request: Request) -> Request:
+    def apply_parser_corrections(
+        self, request: Request, context: dict | None = None
+    ) -> Request:
         """Apply locally learned user corrections to freshly parsed fields."""
-        return self.parser_corrections.apply(request)
+        return self.parser_corrections.apply(request, context=context)
 
-    def learn_parser_corrections(self, before: Request, after: Request) -> int:
-        """Learn only explicit edits made during parser review."""
-        return self.parser_corrections.learn(before, after)
+    def learn_parser_corrections(
+        self, before: Request, after: Request, context: dict | None = None
+    ) -> int:
+        """Learn explicit review edits together with safe parser context."""
+        return self.parser_corrections.learn(before, after, context=context)
 
     def get_deadline_summary(self) -> tuple[int, int]:
-        overdue = 0
-        due_today = 0
-        for request in self.database.get_requests():
-            if request.is_overdue():
-                overdue += 1
-            elif request.is_due_today():
-                due_today += 1
-        return overdue, due_today
+        return self.database.get_deadline_summary()
 
     def get_request(self, request_id: int) -> Request | None:
         return self.database.get_request(request_id)
@@ -119,13 +135,26 @@ class RequestService:
 
     def create_request(self, request: Request) -> int:
         self._normalize_completion_date(request)
+        ocr_text = str(getattr(request, "_ocr_text", "") or "").strip()
+        parser_diagnostics = compact_parser_diagnostics(getattr(request, "_parser_diagnostics", {}) or {})
         stored: StoredDocument | None = None
         source_document = ""
+        source_sha256 = ""
+        source_size_bytes = 0
         if request.source_document:
+            fingerprint = self.fingerprints.fingerprint(request.source_document)
+            if fingerprint is not None:
+                source_sha256 = fingerprint.sha256
+                source_size_bytes = fingerprint.size_bytes
             stored = self.documents.store_document(request.source_document)
             source_document = str(stored.path)
 
-        persisted = replace(request, source_document=source_document)
+        persisted = replace(
+            request,
+            source_document=source_document,
+            source_sha256=source_sha256,
+            source_size_bytes=source_size_bytes,
+        )
         try:
             request_id = self.database.add_request(persisted)
         except Exception:
@@ -134,10 +163,27 @@ class RequestService:
 
         request.id = request_id
         request.source_document = source_document
+        request.source_sha256 = source_sha256
+        request.source_size_bytes = source_size_bytes
+        if parser_diagnostics:
+            try:
+                self.database.set_parser_metadata(request_id, parser_diagnostics, PARSER_VERSION)
+            except Exception:
+                logger.exception("Не удалось сохранить диагностику parser-а для запроса %s", request_id)
+        if ocr_text:
+            try:
+                self.database.set_request_ocr_text(request_id, ocr_text)
+            except Exception:
+                # Search indexing is secondary: a successfully stored registry
+                # record must not be rolled back because its OCR index failed.
+                logger.exception("Не удалось добавить OCR-текст в поисковый индекс для запроса %s", request_id)
+        self._release_transient_import_payload(request)
         return request_id
 
     def update_request(self, request: Request, action: str = "update") -> None:
         self._normalize_completion_date(request)
+        ocr_text = getattr(request, "_ocr_text", None)
+        parser_diagnostics = compact_parser_diagnostics(getattr(request, "_parser_diagnostics", {}) or {})
         if request.id is None:
             raise ValueError("Нельзя обновить запрос без ID.")
 
@@ -159,16 +205,28 @@ class RequestService:
 
         if same_document:
             final_path = old_path
+            final_sha256 = current.source_sha256
+            final_size_bytes = current.source_size_bytes
         elif requested_path:
+            fingerprint = self.fingerprints.fingerprint(requested_path)
+            final_sha256 = fingerprint.sha256 if fingerprint is not None else ""
+            final_size_bytes = fingerprint.size_bytes if fingerprint is not None else 0
             stored = self.documents.store_document(requested_path)
             final_path = str(stored.path)
         else:
             final_path = ""
+            final_sha256 = ""
+            final_size_bytes = 0
 
         if old_path and final_path != old_path:
             trash_path = self.documents.move_to_trash(old_path, request.id)
 
-        persisted = replace(request, source_document=final_path)
+        persisted = replace(
+            request,
+            source_document=final_path,
+            source_sha256=final_sha256,
+            source_size_bytes=final_size_bytes,
+        )
         snapshot_extra = (
             {"_trash_path": str(trash_path)} if trash_path is not None else None
         )
@@ -192,6 +250,43 @@ class RequestService:
             raise
 
         request.source_document = final_path
+        request.source_sha256 = final_sha256
+        request.source_size_bytes = final_size_bytes
+        if parser_diagnostics:
+            try:
+                self.database.set_parser_metadata(request.id, parser_diagnostics, PARSER_VERSION)
+            except Exception:
+                logger.exception("Не удалось обновить диагностику parser-а для запроса %s", request.id)
+        if ocr_text is not None:
+            try:
+                self.database.set_request_ocr_text(request.id, str(ocr_text or ""))
+            except Exception:
+                logger.exception("Не удалось обновить OCR-текст поискового индекса для запроса %s", request.id)
+        self._release_transient_import_payload(request)
+
+    def search_request_ids_full_text(self, value: str, *, limit: int = 5000) -> list[int]:
+        return self.database.search_request_ids_full_text(value, limit=limit)
+
+    def search_request_hits_full_text(self, value: str, *, limit: int = 500) -> list[dict]:
+        return self.database.search_request_hits_full_text(value, limit=limit)
+
+    def rebuild_search_index(self) -> int:
+        return self.database.rebuild_search_index()
+
+    def get_parser_metadata(self, request_id: int) -> dict:
+        return self.database.get_parser_metadata(request_id)
+
+    def find_duplicate_document(self, path: str | Path, *, exclude_request_id: int | None = None):
+        return self.fingerprints.find_duplicate(path, exclude_request_id=exclude_request_id)
+
+    def backfill_document_fingerprints(self, *, limit: int | None = None) -> int:
+        return self.fingerprints.backfill_missing(limit=limit)
+
+    def get_duplicate_document_groups(self):
+        return self.fingerprints.duplicate_groups(backfill=True)
+
+    def get_search_index_stats(self) -> dict[str, int]:
+        return self.database.get_search_index_stats()
 
     def delete_request(self, request_id: int) -> bool:
         request = self.database.get_request(request_id)

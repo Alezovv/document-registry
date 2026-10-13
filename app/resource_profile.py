@@ -51,12 +51,25 @@ class ResourceProfile:
         return self.total_ram_gb <= 0 or self.total_ram_gb < 12
 
     @property
+    def economy_memory_policy(self) -> bool:
+        """Use the strict <=1 GB memory policy for Economy or very small PCs."""
+        nominal = _nominal_ram_gb(self.total_ram_gb)
+        return self.performance_mode == "economy" or (
+            self.performance_mode == "auto" and nominal > 0 and nominal <= 4
+        )
+
+    @property
+    def memory_budget_mb(self) -> int:
+        return 1024 if self.economy_memory_policy else 0
+
+    @property
     def summary(self) -> str:
         memory_mode = "оптимизированная память" if self.memory_efficient_ocr else "быстрый кэш RAM"
+        budget = " · бюджет RAM ~1 ГБ" if self.economy_memory_policy else ""
         return (
             f"{self.performance_mode_label} · {self.name}: CPU {self.logical_cpus} потоков, "
             f"RAM {self.total_ram_gb:.1f} ГБ, OCR {self.worker_threads} поток(а), "
-            f"{self.ocr_dpi}/{self.retry_dpi} DPI · {memory_mode}"
+            f"{self.ocr_dpi}/{self.retry_dpi} DPI · {memory_mode}{budget}"
         )
 
 
@@ -102,10 +115,10 @@ def _nominal_ram_gb(actual_gib: float) -> float:
 
 def _auto_profile(logical_cpus: int, ram_gb: float) -> tuple[str, int, int, int, int, int]:
     nominal = _nominal_ram_gb(ram_gb)
-    if logical_cpus <= 2 or (nominal and nominal < 4):
-        return "Экономный", 1, 130, 170, 1800, 2600
+    if logical_cpus <= 2 or (nominal and nominal <= 4):
+        return "Экономный", 1, 125, 160, 1700, 2400
     if logical_cpus <= 4 or (nominal and nominal < 8):
-        return "Сбалансированный", 1, 145, 185, 2100, 3000
+        return "Сбалансированный", 1, 140, 180, 2000, 2850
     if logical_cpus <= 8 or (nominal and nominal < 12):
         return "Производительный", 2, 155, 200, 2400, 3400
     # 16 GB laptops deliberately keep two OCR threads in Auto to preserve
@@ -130,6 +143,9 @@ def choose_profile(
     nominal = _nominal_ram_gb(ram_gb)
 
     if mode == "economy":
+        # Economy changes concurrency, allocator/cache behavior and model lifetime,
+        # not OCR quality. Keep the same DPI/image limits Auto selected for this
+        # hardware; very small PCs already receive a conservative Auto profile.
         threads = 1
         memory_override = True
     elif mode == "performance":
@@ -191,6 +207,8 @@ def configure_process_environment(profile: ResourceProfile) -> None:
     os.environ["DOCUMENT_REGISTRY_OCR_MAX_WIDTH"] = str(profile.max_image_width)
     os.environ["DOCUMENT_REGISTRY_OCR_MAX_HEIGHT"] = str(profile.max_image_height)
     os.environ["DOCUMENT_REGISTRY_OCR_MEMORY_EFFICIENT"] = "1" if profile.memory_efficient_ocr else "0"
+    os.environ["DOCUMENT_REGISTRY_ECONOMY_MEMORY_POLICY"] = "1" if profile.economy_memory_policy else "0"
+    os.environ["DOCUMENT_REGISTRY_MEMORY_BUDGET_MB"] = str(profile.memory_budget_mb)
     os.environ.setdefault("ORT_LOGGING_LEVEL", "3")
 
 

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.date_controls import NoWheelComboBox, SmartDateEdit
+from app.resource_profile import resource_profile_from_environment
 from app.ui.delegates import StatusDelegate
 from app.ui.styles import (
     INFO_COLOR,
@@ -44,6 +45,7 @@ class RegistryPage(QWidget):
     edit_requested = Signal()
     export_requested = Signal(object)
     bulk_action_requested = Signal(str, object)
+    document_requested = Signal(object)
 
     def __init__(self, request_service, parent=None):
         super().__init__(parent)
@@ -54,6 +56,12 @@ class RegistryPage(QWidget):
         self.sort_column = None
         self.sort_ascending = True
         self._last_filtered = []
+        self._search_snippets: dict[int, str] = {}
+        profile = resource_profile_from_environment()
+        self._page_size = 150 if profile.economy_memory_policy else 400
+        self._page_offset = 0
+        self._total_matching = 0
+        self._manual_requests_mode = False
 
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
@@ -90,6 +98,8 @@ class RegistryPage(QWidget):
         title_layout.addWidget(description)
 
         title_container = QWidget()
+        title_container.setObjectName('titleContainer')
+        title_container.setStyleSheet('QWidget#titleContainer { background-color: transparent; }')
         title_container.setLayout(title_layout)
         title_container.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
@@ -251,6 +261,23 @@ class RegistryPage(QWidget):
         filter_row.addWidget(self.clear_search_button)
         layout.addLayout(filter_row)
 
+        party_row = QHBoxLayout()
+        party_row.setSpacing(10)
+        party_label = QLabel("Стороны:")
+        party_label.setStyleSheet("color:#475467; font-size:12px; font-weight:500;")
+        self.sender_filter = QLineEdit()
+        self.sender_filter.setPlaceholderText("Отправитель / отдел")
+        self.sender_filter.setClearButtonEnabled(True)
+        self.sender_filter.setFixedHeight(34)
+        self.recipient_filter = QLineEdit()
+        self.recipient_filter.setPlaceholderText("Адресат")
+        self.recipient_filter.setClearButtonEnabled(True)
+        self.recipient_filter.setFixedHeight(34)
+        party_row.addWidget(party_label)
+        party_row.addWidget(self.sender_filter, 1)
+        party_row.addWidget(self.recipient_filter, 1)
+        layout.addLayout(party_row)
+
         quick_row = QHBoxLayout()
         quick_row.setSpacing(7)
         quick_label = QLabel("Быстрый период:")
@@ -276,6 +303,8 @@ class RegistryPage(QWidget):
         layout.addLayout(quick_row)
 
         self.search_input.textChanged.connect(self.search_timer.start)
+        self.sender_filter.textChanged.connect(self.search_timer.start)
+        self.recipient_filter.textChanged.connect(self.search_timer.start)
         self.search_field.currentIndexChanged.connect(self.search_field_changed)
         self.status_filter.currentIndexChanged.connect(self.apply_filters)
         self.status_filter.currentIndexChanged.connect(self.update_stat_card_selection)
@@ -348,7 +377,7 @@ class RegistryPage(QWidget):
             self.table.setColumnWidth(column, width)
 
         self.table.cellClicked.connect(self.handle_pin_click)
-        self.table.cellDoubleClicked.connect(lambda _row, _column: self.edit_requested.emit())
+        self.table.cellDoubleClicked.connect(self._handle_table_double_click)
         self.table.itemSelectionChanged.connect(self._update_bulk_bar)
         layout.addWidget(self.table)
 
@@ -364,6 +393,24 @@ class RegistryPage(QWidget):
         )
         self.empty_label.hide()
         layout.addWidget(self.empty_label, 1)
+
+        self.paging_bar = QFrame()
+        paging_layout = QHBoxLayout(self.paging_bar)
+        paging_layout.setContentsMargins(12, 8, 12, 10)
+        self.paging_label = QLabel("")
+        self.paging_label.setStyleSheet("color:#667085; font-size:11px; font-weight:600;")
+        self.load_more_button = QPushButton("Показать ещё")
+        self.load_more_button.setFixedHeight(32)
+        self.load_more_button.setStyleSheet(
+            "QPushButton { background:#FFFFFF; color:#344054; border:1px solid #D0D5DD; "
+            "border-radius:8px; padding:0 14px; font-size:11px; font-weight:650; } "
+            "QPushButton:hover { background:#F8FAFC; border-color:#98A2B3; }"
+        )
+        self.load_more_button.clicked.connect(self._load_more)
+        paging_layout.addWidget(self.paging_label)
+        paging_layout.addStretch()
+        paging_layout.addWidget(self.load_more_button)
+        layout.addWidget(self.paging_bar)
         return card
 
     def _build_bulk_bar(self, parent):
@@ -487,13 +534,17 @@ class RegistryPage(QWidget):
         return super().eventFilter(source, event)
 
     def refresh(self):
-        self.set_requests(self.request_service.get_requests())
+        self._manual_requests_mode = False
+        self._page_offset = 0
+        self._load_page(reset=True)
 
     def set_requests(self, requests):
+        """Compatibility path for tests/legacy callers that provide rows directly."""
+        self._manual_requests_mode = True
         self.requests = list(requests)
         self._rebuild_filter_cache()
         self.update_statistics()
-        self.apply_filters()
+        self._apply_filters_in_memory()
 
     def _rebuild_filter_cache(self):
         cache: dict[int, dict[str, object]] = {}
@@ -518,7 +569,6 @@ class RegistryPage(QWidget):
                 "date": date.toJulianDay() if date.isValid() else 0,
                 "due": due_date.toJulianDay() if due_date.isValid() else 0,
                 "display_status": display_status,
-                "all": " ".join(values.values()),
                 "from_text": "\n".join(
                     part
                     for part in (
@@ -535,6 +585,18 @@ class RegistryPage(QWidget):
         self._status_counts = counts
 
     def update_statistics(self):
+        if not self._manual_requests_mode:
+            try:
+                counts = self.request_service.get_registry_status_counts()
+            except Exception:
+                counts = {}
+            if counts:
+                self.total_value.setText(str(counts.get("total", 0)))
+                self.new_value.setText(str(counts.get("Новый", 0)))
+                self.progress_value.setText(str(counts.get("В работе", 0)))
+                self.done_value.setText(str(counts.get("Исполнен", 0)))
+                self.overdue_value.setText(str(counts.get("Просрочен", 0)))
+                return
         self.total_value.setText(str(len(self.requests)))
         self.new_value.setText(str(self._status_counts["Новый"]))
         self.progress_value.setText(str(self._status_counts["В работе"]))
@@ -554,6 +616,8 @@ class RegistryPage(QWidget):
             if index >= 0:
                 self.status_filter.setCurrentIndex(index)
         self.deadline_filter.setCurrentIndex(0)
+        self.sender_filter.clear()
+        self.recipient_filter.clear()
         del status_blocker, deadline_blocker
         self.update_stat_card_selection()
         self.apply_filters()
@@ -600,12 +664,19 @@ class RegistryPage(QWidget):
                 id_item.setData(Qt.ItemDataRole.UserRole, request.id)
                 self.table.setItem(row_index, 1, id_item)
 
+                snippet = self._search_snippets.get(int(request.id or 0), "")
+                subject_display = str(request.request_subject or "")
+                if snippet:
+                    compact_snippet = " ".join(snippet.split())
+                    if len(compact_snippet) > 150:
+                        compact_snippet = compact_snippet[:147] + "..."
+                    subject_display = (subject_display + "\n↳ " + compact_snippet).strip()
                 values = (
                     request.received_date,
                     request.due_date,
                     from_text,
                     request.to_person,
-                    request.request_subject,
+                    subject_display,
                     request.note,
                     request.display_status(),
                 )
@@ -634,13 +705,104 @@ class RegistryPage(QWidget):
                         item = self.table.item(row_index, column)
                         if item is not None:
                             item.setBackground(row_background)
-                self.table.setRowHeight(row_index, 64)
+                self.table.setRowHeight(row_index, 78 if snippet else 64)
         finally:
             self.table.setUpdatesEnabled(True)
 
-    def apply_filters(self):
-        search_text = self.search_input.text().strip().casefold()
+    def apply_filters(self, *_args):
+        if self._manual_requests_mode:
+            self._apply_filters_in_memory()
+            return
+        self._page_offset = 0
+        self._load_page(reset=True)
+
+    def _load_more(self):
+        if self._manual_requests_mode or len(self.requests) >= self._total_matching:
+            return
+        self._page_offset = len(self.requests)
+        self._load_page(reset=False)
+
+    def _load_page(self, *, reset: bool):
+        date_from_iso = "" if self.date_from_filter.is_empty() else self.date_from_filter.date().toString("yyyy-MM-dd")
+        date_to_iso = "" if self.date_to_filter.is_empty() else self.date_to_filter.date().toString("yyyy-MM-dd")
+        try:
+            page, total = self.request_service.query_requests_page(
+                search_text=self.search_input.text().strip(),
+                search_field=self.search_field.currentText(),
+                sender=self.sender_filter.text().strip(),
+                recipient=self.recipient_filter.text().strip(),
+                status=self.status_filter.currentText(),
+                deadline=self.deadline_filter.currentText(),
+                date_from_iso=date_from_iso,
+                date_to_iso=date_to_iso,
+                sort_column=self.sort_column,
+                sort_ascending=self.sort_ascending,
+                limit=self._page_size,
+                offset=0 if reset else self._page_offset,
+            )
+        except Exception:
+            # Keep the registry usable if a migration/custom SQLite build cannot
+            # satisfy the paged query yet. The compatibility path is bounded.
+            fallback = self.request_service.get_requests()[: self._page_size]
+            self.requests = list(fallback)
+            self._manual_requests_mode = True
+            self._rebuild_filter_cache()
+            self.update_statistics()
+            self._apply_filters_in_memory()
+            return
+
+        if reset:
+            self.requests = list(page)
+        else:
+            known = {request.id for request in self.requests}
+            self.requests.extend(request for request in page if request.id not in known)
+        self._total_matching = int(total)
+        self._rebuild_filter_cache()
+        self.update_statistics()
+
+        self._search_snippets = {}
+        search_raw = self.search_input.text().strip()
+        if search_raw and self.search_field.currentText() == "Все поля":
+            try:
+                current_ids = {int(request.id) for request in self.requests if request.id is not None}
+                hits = self.request_service.search_request_hits_full_text(search_raw, limit=min(2000, max(self._page_size * 4, 500)))
+                self._search_snippets = {
+                    int(hit["request_id"]): str(hit.get("snippet", "") or "")
+                    for hit in hits
+                    if int(hit["request_id"]) in current_ids and str(hit.get("snippet", "") or "").strip()
+                }
+            except Exception:
+                self._search_snippets = {}
+
+        self._last_filtered = list(self.requests)
+        self.display_requests(self.requests)
+        shown = len(self.requests)
+        self.search_count_label.setText(f"Показано: {shown} из {self._total_matching}")
+        self.paging_label.setText(f"Загружено {shown} из {self._total_matching}")
+        self.load_more_button.setVisible(shown < self._total_matching)
+        self.paging_bar.setVisible(self._total_matching > self._page_size)
+        self.update_sort_headers()
+
+    def _apply_filters_in_memory(self):
+        search_raw = self.search_input.text().strip()
+        search_text = search_raw.casefold()
         selected_field = self.search_field.currentText()
+        full_text_ids = None
+        self._search_snippets = {}
+        if search_raw and selected_field == "Все поля":
+            try:
+                hits = self.request_service.search_request_hits_full_text(search_raw, limit=2000)
+                full_text_ids = {int(hit["request_id"]) for hit in hits}
+                self._search_snippets = {
+                    int(hit["request_id"]): str(hit.get("snippet", "") or "")
+                    for hit in hits if str(hit.get("snippet", "") or "").strip()
+                }
+            except Exception:
+                # The in-memory metadata filter remains a safe fallback if a
+                # search index is temporarily unavailable or being migrated.
+                full_text_ids = None
+        sender_filter = self.sender_filter.text().strip().casefold()
+        recipient_filter = self.recipient_filter.text().strip().casefold()
         selected_status = self.status_filter.currentText()
         selected_deadline = self.deadline_filter.currentText()
         date_from = (
@@ -673,6 +835,16 @@ class RegistryPage(QWidget):
                 continue
 
             cached = self._filter_cache.get(id(request), {})
+            if sender_filter:
+                sender_haystack = " ".join((
+                    str(cached.get("from_department", "")),
+                    str(cached.get("from_position", "")),
+                    str(cached.get("from_person", "")),
+                ))
+                if sender_filter not in sender_haystack:
+                    continue
+            if recipient_filter and recipient_filter not in str(cached.get("to_person", "")):
+                continue
             request_date = int(cached.get("date", 0))
             if request_date:
                 if date_from and request_date < date_from:
@@ -693,8 +865,21 @@ class RegistryPage(QWidget):
 
             if search_text:
                 if selected_field == "Все поля":
-                    if search_text not in str(cached.get("all", "")):
-                        continue
+                    if full_text_ids is not None:
+                        if request.id not in full_text_ids:
+                            continue
+                    else:
+                        # Keep no duplicated "all fields" string in memory.  This
+                        # fallback is only used when the SQLite FTS index is temporarily unavailable.
+                        if search_text not in " ".join(
+                            str(cached.get(key, ""))
+                            for key in (
+                                "received_date", "due_date", "completed_date",
+                                "from_department", "from_position", "from_person",
+                                "to_person", "request_subject", "note", "status",
+                            )
+                        ):
+                            continue
                 else:
                     attr = field_mapping.get(selected_field)
                     if search_text not in str(cached.get(attr or "", "")):
@@ -762,6 +947,8 @@ class RegistryPage(QWidget):
             QSignalBlocker(self.date_from_filter),
             QSignalBlocker(self.date_to_filter),
             QSignalBlocker(self.deadline_filter),
+            QSignalBlocker(self.sender_filter),
+            QSignalBlocker(self.recipient_filter),
         ]
         self.search_input.clear()
         self.status_filter.setCurrentIndex(0)
@@ -769,6 +956,8 @@ class RegistryPage(QWidget):
         self.date_from_filter.clear_date()
         self.date_to_filter.clear_date()
         self.deadline_filter.setCurrentIndex(0)
+        self.sender_filter.clear()
+        self.recipient_filter.clear()
         del blockers
         self.sort_column = None
         self.sort_ascending = True
@@ -777,7 +966,7 @@ class RegistryPage(QWidget):
 
     def search_field_changed(self):
         placeholders = {
-            "Все поля": "Поиск по всем полям...",
+            "Все поля": "Поиск по реквизитам и распознанному тексту PDF...",
             "Дата поступления": "Например: 18.08.2026",
             "Срок исполнения": "Например: 25.08.2026",
             "Отдел": "Например: отдел кадров",
@@ -812,6 +1001,18 @@ class RegistryPage(QWidget):
                 item.setText(text + (" ↑" if self.sort_ascending else " ↓"))
             else:
                 item.setText(text)
+
+    def _handle_table_double_click(self, row: int, column: int):
+        request = self.get_selected_request(warn=False)
+        if (
+            request is not None
+            and column == 6
+            and self.search_input.text().strip()
+            and request.source_document
+        ):
+            self.document_requested.emit(request.source_document)
+            return
+        self.edit_requested.emit()
 
     def handle_pin_click(self, row, column):
         if column != 0:

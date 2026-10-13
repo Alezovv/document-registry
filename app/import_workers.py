@@ -1,6 +1,10 @@
 from dataclasses import asdict
 from pathlib import Path
 
+from app.background_task_coordinator import COORDINATOR
+from app.memory_governor import MemoryGovernor
+from app.resource_profile import resource_profile_from_environment
+
 from PySide6.QtCore import QThread, Signal
 
 
@@ -9,6 +13,39 @@ def _lower_worker_priority() -> None:
         QThread.currentThread().setPriority(QThread.Priority.LowPriority)
     except Exception:
         pass
+
+
+def release_shared_ocr_engine() -> bool:
+    """Release the process-wide OCR engine without coupling UI code to OCR internals.
+
+    Importing the heavy OCR module stays inside the worker/service layer.  Besides
+    preserving the UI architecture boundary, this makes the memory-release action
+    safe when OCR dependencies are unavailable during lightweight diagnostics/tests.
+    """
+    try:
+        from app.ocr import OCR
+
+        return bool(OCR.reset_shared_engine())
+    except Exception:
+        return False
+
+
+def apply_post_document_memory_policy():
+    """Release transient memory after one document without slowing normal mode."""
+    governor = MemoryGovernor(resource_profile_from_environment())
+    return governor.after_document(release_shared_ocr_engine)
+
+
+def finalize_ocr_batch_memory():
+    """Unload OCR and return the process to a stable idle footprint after a queue."""
+    governor = MemoryGovernor(resource_profile_from_environment())
+    return governor.finalize_batch(release_shared_ocr_engine)
+
+
+def prepare_ocr_memory_budget():
+    """Create headroom before loading/running OCR in the strict economy profile."""
+    governor = MemoryGovernor(resource_profile_from_environment())
+    return governor.prepare_heavy_task(release_shared_ocr_engine)
 
 
 class OCRWorker(QThread):
@@ -23,7 +60,28 @@ class OCRWorker(QThread):
 
     def run(self):
         _lower_worker_priority()
+        profile = resource_profile_from_environment()
+        task_started = False
         try:
+            if profile.economy_memory_policy:
+                self.progress.emit(1, "Ожидание свободного тяжёлого слота...")
+                task_started = COORDINATOR.wait_start("ocr", timeout=30.0, poll=0.2)
+                if not task_started:
+                    self.error.emit(
+                        "Экономный режим: другая тяжёлая операция выполняется слишком долго. "
+                        "Повторите импорт после её завершения."
+                    )
+                    return
+                self.progress.emit(2, "Проверка запаса памяти...")
+                decision = prepare_ocr_memory_budget()
+                if not decision.allow_heavy_task:
+                    current_mb = decision.current_bytes / (1024 * 1024)
+                    self.error.emit(
+                        f"Недостаточно свободной памяти для безопасного OCR: приложение использует {current_mb:.0f} МБ. "
+                        "Закройте лишние окна/программы и повторите импорт."
+                    )
+                    return
+
             from app.ocr import OCR, OCRError
             from app.parser_cache import ParserCache
 
@@ -72,6 +130,9 @@ class OCRWorker(QThread):
         except Exception as error:
             if not self.isInterruptionRequested():
                 self.error.emit(str(error))
+        finally:
+            if task_started:
+                COORDINATOR.finish("ocr")
 
 
 class ParserWorker(QThread):
@@ -95,13 +156,21 @@ class ParserWorker(QThread):
     def run(self):
         _lower_worker_priority()
         try:
-            from app.document_parser import DocumentParser, PARSER_VERSION
+            from app.document_parser import DocumentParser, PARSER_VERSION, get_parser_cache_version
             from app.parser_cache import ParserCache
+            from app.parser_correction_memory import ParserCorrectionMemory
+            from app.parser_review import compact_parser_diagnostics
 
             if self.isInterruptionRequested():
                 return
 
             cache = ParserCache(self.cache_dir) if self.cache_dir and self.pdf_path else None
+            correction_memory = None
+            if self.cache_dir is not None:
+                correction_memory = ParserCorrectionMemory.for_data_dir(self.cache_dir.parent)
+            parser_cache_version = get_parser_cache_version(
+                correction_memory.cache_key() if correction_memory else None
+            )
             cache_key = ""
             if isinstance(self.ocr_data, dict):
                 cache_key = str(self.ocr_data.get("_cache_key", "") or "")
@@ -110,7 +179,7 @@ class ParserWorker(QThread):
                 try:
                     cached = cache.load_parse(
                         self.pdf_path,
-                        parser_version=PARSER_VERSION,
+                        parser_version=parser_cache_version,
                         cache_key=cache_key or None,
                     )
                 except OSError:
@@ -126,12 +195,12 @@ class ParserWorker(QThread):
                     return
 
             self.progress.emit(60, "Извлечение данных из OCR...")
-            parser = DocumentParser()
+            parser = DocumentParser(correction_memory=correction_memory)
             request = parser.parse(self.ocr_data, file_name=self.file_name)
             if self.isInterruptionRequested():
                 return
             self.progress.emit(88, "Проверка результата...")
-            diagnostics = asdict(parser.last_diagnostics)
+            diagnostics = compact_parser_diagnostics(asdict(parser.last_diagnostics))
 
             if cache is not None:
                 try:
@@ -141,7 +210,7 @@ class ParserWorker(QThread):
                         self.pdf_path,
                         request,
                         diagnostics,
-                        parser_version=PARSER_VERSION,
+                        parser_version=parser_cache_version,
                         cache_key=cache_key,
                     )
                 except OSError:
@@ -157,3 +226,7 @@ class ParserWorker(QThread):
         except Exception as error:
             if not self.isInterruptionRequested():
                 self.error.emit(str(error))
+        finally:
+            # OCR blocks can be large. The UI stores only compact diagnostics and
+            # text needed for search, so release the worker's reference immediately.
+            self.ocr_data = None

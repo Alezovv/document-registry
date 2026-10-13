@@ -7,6 +7,8 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 
 from app.legacy_import_service import LegacyImportError, LegacyImportService
+from app.background_task_coordinator import COORDINATOR
+from app.resource_profile import resource_profile_from_environment
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +24,20 @@ class LegacyImportWorker(QThread):
         self.documents_dir = documents_dir
 
     def run(self):
+        task_started = False
         try:
+            if resource_profile_from_environment().economy_memory_policy:
+                task_started = COORDINATOR.wait_start("legacy_import", timeout=30.0)
+                if not task_started:
+                    raise LegacyImportError("Экономный режим: дождитесь завершения OCR/backup и повторите импорт старой базы.")
             result = self.service.migrate(self.source_db, self.documents_dir)
             self.succeeded.emit(result)
         except Exception as error:
             logger.exception("Ошибка переноса старой базы")
             self.failed.emit(str(error))
+        finally:
+            if task_started:
+                COORDINATOR.finish("legacy_import")
 
 
 class LegacyImportController:

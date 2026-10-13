@@ -59,6 +59,8 @@ class HistoryPage(QWidget):
 
     def _build_header(self):
         container = QWidget()
+        container.setObjectName('headerContainer')
+        container.setStyleSheet('QWidget#headerContainer { background-color: transparent; }')
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -72,6 +74,8 @@ class HistoryPage(QWidget):
         title_layout.addWidget(description)
 
         title_container = QWidget()
+        title_container.setObjectName('titleContainer')
+        title_container.setStyleSheet('QWidget#titleContainer { background-color: transparent; }')
         title_container.setLayout(title_layout)
         title_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout.addWidget(title_container, 1)

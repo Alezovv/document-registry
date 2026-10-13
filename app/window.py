@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QStackedWid
 from app.app_paths import get_app_paths
 from app.backup_service import BackupService
 from app.database import Database
+from app.data_health_monitor import DataHealthMonitor
 from app.export_service import ExportService
 from app.document_service import DocumentService
 from app.diagnostics_service import DiagnosticsService
@@ -14,12 +15,15 @@ from app.performance_mode_service import apply_performance_mode
 from app.portable_paths import absolute_without_resolving
 from app.performance_diagnostics import PerformanceDiagnostics
 from app.settings_service import AppSettings, SettingsService
+from app.ui.search_index_controller import SearchIndexController
 from app.ui.backup_controller import BackupController
 from app.ui.document_controller import DocumentController
 from app.ui.diagnostics_controller import DiagnosticsController
 from app.ui.export_controller import ExportController
 from app.ui.documents_page import DocumentsPage
 from app.ui.history_page import HistoryPage
+from app.ui.shahmatka_page import ShahmatkaPage
+
 from app.ui.import_controller import ImportController
 from app.ui.legacy_import_controller import LegacyImportController
 from app.ui.navigation_sidebar import NavigationSidebar
@@ -28,19 +32,15 @@ from app.ui.request_controller import RequestController
 from app.ui.settings_page import SettingsPage
 from app.ui.styles import APP_STYLE
 from app.ui.toast import ToastNotification
+from app.ui.update_window_mixin import UpdateWindowMixin
 logger = logging.getLogger(__name__)
-
-
-class MainWindow(QMainWindow):
+class MainWindow(UpdateWindowMixin, QMainWindow):
     """Application shell.
-
     Pages own presentation state; controllers own user actions; services own
     business/filesystem/database behavior. MainWindow only wires them together.
     """
-
     def __init__(self):
         super().__init__()
-
         self.paths = get_app_paths()
         self.database = Database()
         self.base_dir = self.paths.runtime
@@ -53,16 +53,10 @@ class MainWindow(QMainWindow):
             runtime_root=self.paths.runtime,
         )
         self.settings = self.settings_service.load()
-
-        # Treat settings.json as the authoritative source at runtime as well as at
-        # bootstrap. This makes overlay installs/alternate launchers harmless and
-        # ensures the selected mode is really active before OCR is first imported.
         self.resource_profile = apply_performance_mode(self.settings.performance_mode).profile
-
         self.confirm_delete_enabled = self.settings.confirm_delete
         self.documents_dir = absolute_without_resolving(self.settings.documents_dir)
         self.documents_dir.mkdir(parents=True, exist_ok=True)
-
         self.document_service = DocumentService(self.database, self.documents_dir)
         repaired_paths = self.document_service.repair_stored_document_paths(preserve_runtime_spelling=True)
         if repaired_paths:
@@ -86,29 +80,26 @@ class MainWindow(QMainWindow):
             self.show_toast,
             lambda: self.settings_page,
         )
-
-        # Always start on the registry. The last visited settings/documents page
-        # must never replace the main working screen on the next launch.
         self.current_page = "registry"
         self.page_widgets: dict[str, QWidget] = {}
         self.registry_page: RegistryPage | None = None
         self.documents_page: DocumentsPage | None = None
         self.history_page: HistoryPage | None = None
         self.settings_page: SettingsPage | None = None
-
         self._create_controllers()
+        self.data_health_monitor = DataHealthMonitor(self.database, self.backup_service, self)
+        self.data_health_monitor.warning.connect(self.show_toast)
+        self._setup_update_system()
         self._build_ui()
-
         self.setWindowTitle("Реестр запросов")
         self.setMinimumSize(1100, 650)
         self.setStyleSheet(APP_STYLE)
         self.show_page(self.current_page)
         QTimer.singleShot(900, self._show_deadline_summary)
         QTimer.singleShot(2500, self._maybe_auto_backup)
-
+        self.search_index_controller = SearchIndexController(self.request_service, self.paths.data / "parser_cache", self)
     def _create_controllers(self):
         documents_dir = lambda: self.documents_dir
-
         self.request_controller = RequestController(
             self.request_service,
             documents_dir,
@@ -116,7 +107,6 @@ class MainWindow(QMainWindow):
         )
         self.request_controller.changed.connect(self.load_requests)
         self.request_controller.toast_requested.connect(self.show_toast)
-
         self.document_controller = DocumentController(
             self.document_service,
             self.request_service,
@@ -124,7 +114,6 @@ class MainWindow(QMainWindow):
         )
         self.document_controller.changed.connect(self._refresh_after_document_change)
         self.document_controller.toast_requested.connect(self.show_toast)
-
         self.import_controller = ImportController(
             self.request_service,
             self.document_service,
@@ -133,7 +122,6 @@ class MainWindow(QMainWindow):
         )
         self.import_controller.finished.connect(lambda: self.show_page("registry"))
         self.import_controller.toast_requested.connect(self.show_toast)
-
         self.export_controller = ExportController(self.export_service, parent=self)
         self.export_controller.toast_requested.connect(self.show_toast)
 
@@ -147,7 +135,6 @@ class MainWindow(QMainWindow):
             parent=self,
             on_success=self._after_legacy_import,
         )
-
     def _build_ui(self):
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -205,6 +192,7 @@ class MainWindow(QMainWindow):
             widget.edit_requested.connect(self._edit_selected_request)
             widget.export_requested.connect(self.export_controller.export_requests)
             widget.bulk_action_requested.connect(self._handle_bulk_action)
+            widget.document_requested.connect(self.document_controller.open_document)
             self.registry_page = widget
             return widget
 
@@ -232,17 +220,26 @@ class MainWindow(QMainWindow):
                 performance_diagnostics=self.performance_diagnostics,
                 performance_mode=self.settings.performance_mode,
                 auto_backup_path=self.auto_backup_path,
+                update_source_dir=self.settings.update_source_dir,
                 parent=self,
             )
             widget.save_requested.connect(self.save_settings)
             widget.backup_requested.connect(self.backup_controller.create_backup)
             widget.restore_requested.connect(self.backup_controller.restore_backup)
             widget.legacy_import_requested.connect(self.legacy_import_controller.start)
+            widget.diagnostics_center_requested.connect(self.diagnostics_controller.open_center)
             widget.state_check_requested.connect(self.diagnostics_controller.check_state)
             widget.diagnostic_package_requested.connect(self.diagnostics_controller.create_package)
             widget.open_logs_requested.connect(self.diagnostics_controller.open_logs_folder)
             widget.copy_info_requested.connect(self.diagnostics_controller.copy_info)
+            self._bind_update_settings_page(widget)
             self.settings_page = widget
+            return widget
+
+        
+        if page == "shahmatka":
+            widget = ShahmatkaPage(parent=self)
+            self.shahmatka_page = widget
             return widget
 
         raise ValueError(f"Неизвестная страница: {page}")
@@ -259,6 +256,7 @@ class MainWindow(QMainWindow):
                 self.documents_dir,
                 self.confirm_delete_enabled,
                 self.settings.performance_mode,
+                self.settings.update_source_dir,
             )
 
     def _edit_selected_request(self):
@@ -294,7 +292,9 @@ class MainWindow(QMainWindow):
 
     def load_requests(self):
         if self.registry_page is not None:
-            self.registry_page.set_requests(self.request_service.get_requests())
+            # RegistryPage owns paged/lazy loading; do not materialize the entire
+            # requests table in MainWindow after every edit/import.
+            self.registry_page.refresh()
         if self.history_page is not None and self.current_page == "history":
             self.history_page.load_history()
 
@@ -343,7 +343,13 @@ class MainWindow(QMainWindow):
             self.settings_page.refresh_storage_info()
         self.show_page("registry")
 
-    def save_settings(self, folder: str, confirm_delete: bool, performance_mode: str):
+    def save_settings(
+        self,
+        folder: str,
+        confirm_delete: bool,
+        performance_mode: str,
+        update_source_dir: str = "",
+    ):
         folder = (folder or "").strip()
         if not folder:
             QMessageBox.warning(self, "Ошибка", "Укажите папку документов.")
@@ -358,6 +364,7 @@ class MainWindow(QMainWindow):
                 confirm_delete=bool(confirm_delete),
                 last_page=self.current_page,
                 performance_mode=performance_mode,
+                update_source_dir=str(update_source_dir or "").strip(),
             )
             self.settings_service.save(settings)
             self.settings = settings
@@ -381,6 +388,7 @@ class MainWindow(QMainWindow):
                     documents_dir,
                     self.confirm_delete_enabled,
                     settings.performance_mode,
+                    settings.update_source_dir,
                 )
             if self.documents_page is not None:
                 self.documents_page.refresh()

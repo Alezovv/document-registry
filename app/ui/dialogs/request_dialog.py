@@ -10,10 +10,13 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QMessageBox,
+    QMenu,
     QScrollArea,
     QSizePolicy,
     QTextEdit,
@@ -24,6 +27,7 @@ from PySide6.QtWidgets import (
 from app.ui.date_controls import NoWheelComboBox, SmartDateEdit
 from app.parser_cache import ParserCache
 from app.pdf_highlight_service import PdfHighlightPreview
+from app.parser_review import FIELD_LABELS, REVIEWABLE_FIELDS, field_review_info, needs_review
 from app.ui.pdf_viewer_mixin import PdfViewerMixin
 from app.ui.request_form_mixin import RequestFormMixin
 from app.ui.styles import APP_STYLE, DIALOG_STYLE, STATUSES
@@ -64,6 +68,8 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         )
         self.pdf_highlight_preview = PdfHighlightPreview()
         self._pending_highlight_page = None
+        self._highlight_field = None
+        self._review_buttons = {}
 
         self.pdf_document = QPdfDocument(self)
         self.current_pdf_path = None
@@ -77,7 +83,7 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         self.setMinimumSize(500, 600)
 
         self.setStyleSheet(
-            APP_STYLE + """
+            APP_STYLE + DIALOG_STYLE + """
             QDialog { background-color: #F8FAFC; }
             QLabel { color: #344054; }
             QLineEdit, QDateEdit, QComboBox, QTextEdit {
@@ -100,6 +106,183 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         if request is not None:
             self.load_request()
             self.highlight_empty_fields()
+        self._apply_parser_review_styles()
+
+    def _review_widget(self, field: str):
+        return {
+            "received_date": getattr(self, "received_date", None),
+            "from_department": getattr(self, "from_department", None),
+            "from_position": getattr(self, "from_position", None),
+            "from_person": getattr(self, "from_person", None),
+            "to_person": getattr(self, "to_person", None),
+            "request_subject": getattr(self, "request_subject", None),
+        }.get(field)
+
+    @staticmethod
+    def _confidence_text(value: float) -> str:
+        return f"{max(0, min(100, round(float(value or 0.0) * 100)))}%"
+
+    def _build_parser_review_bar(self, layout, parent) -> None:
+        diagnostics = self.parser_diagnostics if isinstance(self.parser_diagnostics, dict) else {}
+        results = diagnostics.get("field_results") or {}
+        if not isinstance(results, dict) or not results:
+            return
+        bar = QFrame(parent)
+        bar.setObjectName("parserReviewBar")
+        bar.setStyleSheet(
+            "QFrame#parserReviewBar { background:#F8FAFC; border:1px solid #E2E8F0; "
+            "border-radius:9px; }"
+        )
+        outer = QVBoxLayout(bar)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(5)
+        caption = QLabel("Распознавание:", bar)
+        caption.setStyleSheet("color:#64748B; font-size:11px; font-weight:700;")
+        outer.addWidget(caption)
+
+        # Confidence badges used to live in one QHBoxLayout. At the dialog's
+        # normal width that forced Qt to squeeze every button until long Russian
+        # labels were clipped. Keep the bar compact, but wrap badges into a
+        # three-column grid and size each button from its actual text.
+        badges = QGridLayout()
+        badges.setContentsMargins(0, 0, 0, 0)
+        badges.setHorizontalSpacing(5)
+        badges.setVerticalSpacing(5)
+        badge_index = 0
+        for field in REVIEWABLE_FIELDS:
+            info = field_review_info(diagnostics, field)
+            value = str(info.get("value", "") or "").strip()
+            confidence = float(info.get("confidence", 0.0) or 0.0)
+            if not value and confidence <= 0:
+                continue
+            decision = str(info.get("decision", "") or "")
+            warning = decision in {"review", "suggestion", "low_confidence"}
+            button = QPushButton(
+                f"{FIELD_LABELS.get(field, field)} {self._confidence_text(confidence)}",
+                bar,
+            )
+            button.setFixedHeight(29)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.setMinimumWidth(button.fontMetrics().horizontalAdvance(button.text()) + 24)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            if warning:
+                button.setStyleSheet(
+                    "QPushButton { background:#FFFAEB; color:#B54708; border:1px solid #FEDF89; "
+                    "border-radius:7px; padding:0 8px; font-size:10px; font-weight:700; } "
+                    "QPushButton:hover { background:#FEF0C7; }"
+                )
+            else:
+                button.setStyleSheet(
+                    "QPushButton { background:#F0FDF4; color:#166534; border:1px solid #BBF7D0; "
+                    "border-radius:7px; padding:0 8px; font-size:10px; font-weight:700; } "
+                    "QPushButton:hover { background:#DCFCE7; }"
+                )
+            source = str(info.get("source", "") or (diagnostics.get("field_sources") or {}).get(field, ""))
+            button.setToolTip(
+                f"Уверенность: {self._confidence_text(confidence)}\n"
+                f"Решение: {decision or '—'}\nИсточник: {source or '—'}\n"
+                "Нажмите для вариантов и перехода к месту в PDF."
+            )
+            button.clicked.connect(lambda _checked=False, f=field, b=button: self._show_field_review_menu(f, b))
+            self._review_buttons[field] = button
+            grid_row, grid_col = divmod(badge_index, 3)
+            badges.addWidget(button, grid_row, grid_col)
+            badge_index += 1
+
+        for column in range(3):
+            badges.setColumnStretch(column, 1)
+        outer.addLayout(badges)
+        layout.addWidget(bar)
+
+    def _set_review_field_value(self, field: str, value: str) -> None:
+        widget = self._review_widget(field)
+        if widget is None:
+            return
+        value = str(value or "")
+        if field == "received_date":
+            parsed = QDate.fromString(value, "dd.MM.yyyy")
+            if parsed.isValid():
+                widget.setDate(parsed)
+        elif isinstance(widget, QTextEdit):
+            widget.setPlainText(value)
+        elif isinstance(widget, QLineEdit):
+            widget.setText(value)
+        self._is_dirty = True
+
+    def _show_field_review_menu(self, field: str, button: QPushButton) -> None:
+        info = field_review_info(self.parser_diagnostics, field)
+        menu = QMenu(button)
+        current = str(info.get("value", "") or "").strip()
+        if current:
+            header = menu.addAction(f"Текущее: {current}")
+            header.setEnabled(False)
+        alternatives = info.get("alternatives") or []
+        if alternatives:
+            menu.addSeparator()
+            for item in alternatives[:3]:
+                if not isinstance(item, dict):
+                    continue
+                value = str(item.get("value", "") or "").strip()
+                if not value:
+                    continue
+                conf = self._confidence_text(float(item.get("confidence", 0.0) or 0.0))
+                source = str(item.get("source", "") or "")
+                action = menu.addAction(f"Использовать: {value}  · {conf}")
+                action.setToolTip(f"Источник: {source or '—'}")
+                action.triggered.connect(lambda _checked=False, f=field, v=value: self._set_review_field_value(f, v))
+        regions = info.get("source_blocks") or (self.parser_diagnostics.get("field_regions") or {}).get(field, [])
+        if regions:
+            menu.addSeparator()
+            source_action = menu.addAction("Показать источник в PDF")
+            source_action.triggered.connect(lambda _checked=False, f=field: self.focus_parser_source(f))
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+
+    def _resolve_pdf_path(self) -> Path | None:
+        if getattr(self, "selected_pdf", None):
+            candidate = Path(self.selected_pdf)
+            if candidate.is_file():
+                return candidate
+        if self.request and self.request.source_document:
+            candidate = Path(self.request.source_document)
+            if candidate.is_file():
+                return candidate
+            if self.documents_dir:
+                fallback = self.documents_dir / candidate.name
+                if fallback.is_file():
+                    return fallback
+        return None
+
+    def focus_parser_source(self, field: str) -> None:
+        pdf_path = self._resolve_pdf_path()
+        if pdf_path is None:
+            QMessageBox.information(self, "Источник поля", "PDF-файл не найден.")
+            return
+        info = field_review_info(self.parser_diagnostics, field)
+        regions = info.get("source_blocks") or (self.parser_diagnostics.get("field_regions") or {}).get(field, [])
+        if not regions:
+            QMessageBox.information(self, "Источник поля", "Для этого поля координаты источника не сохранены.")
+            return
+        self._highlight_field = field
+        pages = [int(item.get("page_index", 0) or 0) for item in regions if isinstance(item, dict)]
+        self._pending_highlight_page = min(pages) if pages else 0
+        self.toggle_pdf_viewer(True, pdf_path)
+
+    def _apply_parser_review_styles(self) -> None:
+        for field in REVIEWABLE_FIELDS:
+            widget = self._review_widget(field)
+            if widget is None:
+                continue
+            info = field_review_info(self.parser_diagnostics, field)
+            confidence = float(info.get("confidence", 0.0) or 0.0)
+            decision = str(info.get("decision", "") or "")
+            if confidence <= 0 and not info.get("value"):
+                continue
+            widget.setToolTip(
+                (widget.toolTip() + "\n" if widget.toolTip() else "")
+                + f"Parser: {self._confidence_text(confidence)}, {decision or 'без решения'}"
+            )
+            if needs_review(self.parser_diagnostics, field):
+                widget.setStyleSheet("border: 1px solid #F79009; background-color: #FFFAEB;")
 
     def _cleanup_parser_preview(self):
         try:
@@ -189,6 +372,8 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         # ЛЕВАЯ КОЛОНКА: Форма редактирования
         # ============================================================
         self.left_widget = QWidget(self)
+        self.left_widget.setObjectName('leftWidget')
+        self.left_widget.setStyleSheet('QWidget#leftWidget { background-color: transparent; }')
         self.left_widget.setMinimumWidth(600)
         main_layout = QVBoxLayout(self.left_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -243,11 +428,14 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         )
         subtitle.setObjectName("dialogSubtitle")
         header_layout.addWidget(subtitle)
+        self._build_parser_review_bar(header_layout, header_widget)
 
         main_layout.addWidget(header_widget)
 
         # 2. Форма с карточками (ScrollArea)
         self.form_container = QWidget()
+        self.form_container.setObjectName('formContainer')
+        self.form_container.setStyleSheet('QWidget#formContainer { background-color: transparent; }')
         form_layout = QVBoxLayout(self.form_container)
         form_layout.setContentsMargins(30, 16, 30, 22)
         form_layout.setSpacing(14)

@@ -89,10 +89,91 @@ def _self_check_output_from_argv(argv: list[str]) -> Path | None:
     return Path(argv[index + 1])
 
 
+def _argv_value(argv: list[str], flag: str) -> str | None:
+    try:
+        index = argv.index(flag)
+    except ValueError:
+        return None
+    if index + 1 >= len(argv):
+        return None
+    return argv[index + 1]
+
+
+def _run_database_migration() -> int:
+    from app.db_migrations import (
+        CURRENT_SCHEMA_VERSION,
+        capture_invariants,
+        migrate_database,
+        write_report,
+    )
+
+    database_value = _argv_value(sys.argv, "--migrate-database")
+    if not database_value:
+        return 2
+    schema_value = _argv_value(sys.argv, "--target-schema")
+    target_schema = int(schema_value) if schema_value is not None else CURRENT_SCHEMA_VERSION
+    allow_downgrade = "--allow-downgrade" in sys.argv
+    invariants = capture_invariants(
+        database_value,
+        max_schema=target_schema if allow_downgrade else None,
+    )
+    report = migrate_database(
+        database_value,
+        target_schema=target_schema,
+        expected_invariants=invariants,
+        allow_downgrade=allow_downgrade,
+    )
+    report_path = _argv_value(sys.argv, "--migration-report")
+    if report_path:
+        write_report(report, report_path)
+    return 0
+
+
+def _run_database_validation() -> int:
+    from app.db_migrations import CURRENT_SCHEMA_VERSION, validate_database, write_report
+
+    database_value = _argv_value(sys.argv, "--validate-database")
+    if not database_value:
+        return 2
+    schema_value = _argv_value(sys.argv, "--expected-schema")
+    expected_schema = int(schema_value) if schema_value is not None else CURRENT_SCHEMA_VERSION
+    report = validate_database(database_value, expected_schema=expected_schema)
+    report_path = _argv_value(sys.argv, "--database-report")
+    if report_path:
+        write_report(report, report_path)
+    return 0
+
+
 def _run_self_check() -> int:
     from app.self_check import perform_self_check, write_self_check_report
 
     result = perform_self_check(PATHS)
+    output = _self_check_output_from_argv(sys.argv)
+    if output is not None:
+        write_self_check_report(result, output)
+    elif sys.stdout is not None:
+        import json
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    return 0 if result.ok else 2
+
+
+def _run_ocr_self_check() -> int:
+    from app.self_check import perform_ocr_runtime_self_check, write_self_check_report
+
+    result = perform_ocr_runtime_self_check(PATHS)
+    output = _self_check_output_from_argv(sys.argv)
+    if output is not None:
+        write_self_check_report(result, output)
+    elif sys.stdout is not None:
+        import json
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    return 0 if result.ok else 2
+
+
+def _run_ner_self_check() -> int:
+    from app.self_check import perform_ner_runtime_self_check, write_self_check_report
+
+    result = perform_ner_runtime_self_check(PATHS)
     output = _self_check_output_from_argv(sys.argv)
     if output is not None:
         write_self_check_report(result, output)
@@ -140,6 +221,14 @@ class PerformanceMonitor:
 
 
 def main() -> None:
+    if "--migrate-database" in sys.argv:
+        raise SystemExit(_run_database_migration())
+    if "--validate-database" in sys.argv:
+        raise SystemExit(_run_database_validation())
+    if "--ocr-self-check" in sys.argv:
+        raise SystemExit(_run_ocr_self_check())
+    if "--ner-self-check" in sys.argv:
+        raise SystemExit(_run_ner_self_check())
     if "--self-check" in sys.argv:
         raise SystemExit(_run_self_check())
 

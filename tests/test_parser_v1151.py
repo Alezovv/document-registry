@@ -53,7 +53,7 @@ class ParserV1151Tests(unittest.TestCase):
             self.assertEqual(corrected.from_department, "ОМВД России по району")
 
             payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["version"], 1)
+            self.assertEqual(payload["version"], ParserCorrectionMemory.VERSION)
 
 
     def test_two_confirmations_enable_safe_fuzzy_reuse(self):

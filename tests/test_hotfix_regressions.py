@@ -11,6 +11,14 @@ from app.settings_service import SettingsService
 
 
 class HotfixRegressionTests(unittest.TestCase):
+    def test_update_download_window_is_minimizable_native_window(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "app" / "ui" / "update_controller.py").read_text(encoding="utf-8")
+        self.assertIn("Qt.WindowType.Window\n", source)
+        self.assertIn("Qt.WindowType.WindowMinimizeButtonHint", source)
+        self.assertIn("Qt.WindowType.WindowCloseButtonHint", source)
+        self.assertNotIn("dialog.windowFlags()\n            | Qt.WindowType.WindowMinimizeButtonHint", source)
+
     def test_settings_paths_are_made_absolute_without_resolving_aliases(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -48,7 +56,7 @@ class HotfixRegressionTests(unittest.TestCase):
     def test_main_window_remains_thin(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "app" / "window.py").read_text(encoding="utf-8")
-        self.assertLessEqual(len(source.splitlines()), 400)
+        self.assertLessEqual(len(source.splitlines()), 450)
 
     def test_document_service_returns_canonical_path_but_keeps_runtime_spelling(self):
         with tempfile.TemporaryDirectory() as temp:

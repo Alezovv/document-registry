@@ -39,6 +39,9 @@ class PdfViewerMixin:
         diagnostics = getattr(self, "parser_diagnostics", {}) or {}
         regions = diagnostics.get("field_regions") if isinstance(diagnostics, dict) else None
         if isinstance(regions, dict) and any(regions.values()):
+            selected = getattr(self, "_highlight_field", None)
+            if selected and regions.get(selected):
+                return {selected: regions.get(selected) or []}
             return regions
         cache = getattr(self, "parser_cache", None)
         if cache is not None:

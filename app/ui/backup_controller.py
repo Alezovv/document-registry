@@ -8,6 +8,8 @@ from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from app.backup_service import BackupError, BackupService
+from app.background_task_coordinator import COORDINATOR
+from app.resource_profile import resource_profile_from_environment
 
 
 logger = logging.getLogger(__name__)
@@ -28,7 +30,13 @@ class BackupWorker(QThread):
             self.setPriority(QThread.Priority.LowPriority)
         except Exception:
             pass
+        task_started = False
         try:
+            profile = resource_profile_from_environment()
+            if profile.economy_memory_policy:
+                task_started = COORDINATOR.wait_start("backup", timeout=30.0)
+                if not task_started:
+                    raise BackupError("Экономный режим: дождитесь завершения OCR или другой тяжёлой операции и повторите backup.")
             if self.operation in {"create", "auto"}:
                 result = self.service.create_backup(self.path)
             elif self.operation == "restore":
@@ -40,6 +48,9 @@ class BackupWorker(QThread):
         except Exception as error:
             logger.exception("Ошибка операции backup: %s", self.operation)
             self.failed.emit(str(error))
+        finally:
+            if task_started:
+                COORDINATOR.finish("backup")
 
 
 class BackupController(QObject):
@@ -73,6 +84,8 @@ class BackupController(QObject):
         created, because BackupService writes via a temporary file + replace.
         """
         if self._is_busy() or not self.service.is_backup_due(path, interval_days):
+            return False
+        if resource_profile_from_environment().economy_memory_policy and COORDINATOR.is_busy():
             return False
         self._start("auto", str(path))
         return True
@@ -125,13 +138,13 @@ class BackupController(QObject):
         if operation == "create":
             self.toast_requested.emit(
                 "Резервная копия создана",
-                f"Сохранено: {Path(result.path).name}",
+                f"Сохранено и проверено: {Path(result.path).name}",
                 "success",
             )
         elif operation == "auto":
             self.toast_requested.emit(
                 "Автобэкап обновлён",
-                "Еженедельная резервная копия успешно заменена.",
+                "Еженедельная резервная копия успешно заменена и проверена.",
                 "success",
             )
         else:

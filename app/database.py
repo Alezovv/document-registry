@@ -1,10 +1,12 @@
 import sqlite3
 import json
+import re
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Any
 
 from app.app_paths import get_app_paths
+from app.db_migrations import CURRENT_SCHEMA_VERSION, migrate_database
 from app.models import Request
 from app.portable_paths import RUNTIME_TOKEN, decode_runtime_path, encode_runtime_path, portable_basename
 
@@ -24,7 +26,7 @@ class Database:
     Keeping this class filesystem-free makes transactions predictable and testable.
     """
 
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 
     def __init__(self, documents_dir=None, data_dir=None, db_path=None):
         self.data_dir = Path(data_dir) if data_dir else DATA_DIR
@@ -53,11 +55,14 @@ class Database:
         """Create an isolated SQLite connection and rollback on failure."""
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
+        conn.create_function("CASEFOLD", 1, lambda value: str(value or "").casefold(), deterministic=True)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 10000")
         conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA temp_store = MEMORY")
-        conn.execute("PRAGMA cache_size = -16384")
+        conn.execute("PRAGMA temp_store = FILE")
+        # Keep SQLite cache bounded for long desktop sessions; OCR is the heavy
+        # component and should get the available memory instead of per-query temp pages.
+        conn.execute("PRAGMA cache_size = -8192")
         try:
             yield conn
         except Exception:
@@ -84,6 +89,10 @@ class Database:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_requests_source_document "
                 "ON requests(source_document)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_requests_source_fingerprint "
+                "ON requests(source_sha256, source_size_bytes)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_requests_due_date_status "
@@ -122,7 +131,9 @@ class Database:
                     source_document TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    is_pinned INTEGER NOT NULL DEFAULT 0
+                    is_pinned INTEGER NOT NULL DEFAULT 0,
+                    source_sha256 TEXT NOT NULL DEFAULT '',
+                    source_size_bytes INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -141,28 +152,8 @@ class Database:
         self._fix_status_encoding()
 
     def _upgrade_schema(self):
-        with self._get_connection() as conn:
-            cursor = conn.execute("PRAGMA table_info(request_history)")
-            columns = [row["name"] for row in cursor.fetchall()]
-            if columns and "snapshot" not in columns:
-                conn.execute(
-                    "ALTER TABLE request_history ADD COLUMN snapshot TEXT"
-                )
-
-            request_columns = [
-                row["name"] for row in conn.execute("PRAGMA table_info(requests)").fetchall()
-            ]
-            if request_columns and "due_date" not in request_columns:
-                conn.execute("ALTER TABLE requests ADD COLUMN due_date TEXT DEFAULT ''")
-            if request_columns and "completed_date" not in request_columns:
-                conn.execute("ALTER TABLE requests ADD COLUMN completed_date TEXT DEFAULT ''")
-
-            version = conn.execute("PRAGMA user_version").fetchone()
-            current_version = int(version[0] if version is not None else 0)
-
-            if current_version < self.SCHEMA_VERSION:
-                self._ensure_history_table(conn)
-                conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+        """Upgrade the SQLite schema through the versioned migration framework."""
+        migrate_database(self.db_path, target_schema=self.SCHEMA_VERSION)
 
     def _ensure_history_table(self, conn):
         conn.execute(
@@ -353,6 +344,8 @@ class Database:
             status=(row["status"] or "Новый"),
             source_document=self.decode_source_document(row["source_document"] or ""),
             is_pinned=bool(row["is_pinned"]),
+            source_sha256=(row["source_sha256"] or "") if "source_sha256" in row.keys() else "",
+            source_size_bytes=int(row["source_size_bytes"] or 0) if "source_size_bytes" in row.keys() else 0,
         )
 
     def get_history(self):
@@ -449,6 +442,182 @@ class Database:
             ).fetchall()
             return [self._row_to_request(row) for row in rows]
 
+    @staticmethod
+    def _sql_date_expr(column: str) -> str:
+        return (
+            f"CASE WHEN LENGTH(TRIM(COALESCE({column}, ''))) = 10 "
+            f"THEN substr({column}, 7, 4) || '-' || substr({column}, 4, 2) || '-' || substr({column}, 1, 2) "
+            "ELSE '' END"
+        )
+
+    def get_registry_status_counts(self) -> dict[str, int]:
+        due_expr = self._sql_date_expr("due_date")
+        with self._get_connection() as conn:
+            row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status = 'Новый' AND NOT (status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime')) THEN 1 ELSE 0 END) AS new_count,
+                    SUM(CASE WHEN status = 'В работе' AND NOT (status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime')) THEN 1 ELSE 0 END) AS progress_count,
+                    SUM(CASE WHEN status = 'Исполнен' THEN 1 ELSE 0 END) AS done_count,
+                    SUM(CASE WHEN status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime') THEN 1 ELSE 0 END) AS overdue_count
+                FROM requests
+                """
+            ).fetchone()
+        return {
+            "total": int(row["total"] or 0),
+            "Новый": int(row["new_count"] or 0),
+            "В работе": int(row["progress_count"] or 0),
+            "Исполнен": int(row["done_count"] or 0),
+            "Просрочен": int(row["overdue_count"] or 0),
+        }
+
+    def get_deadline_summary(self) -> tuple[int, int]:
+        due_expr = self._sql_date_expr("due_date")
+        with self._get_connection() as conn:
+            row = conn.execute(
+                f"""
+                SELECT
+                    SUM(CASE WHEN status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime') THEN 1 ELSE 0 END) AS overdue,
+                    SUM(CASE WHEN status != 'Исполнен' AND {due_expr} = date('now','localtime') THEN 1 ELSE 0 END) AS due_today
+                FROM requests
+                """
+            ).fetchone()
+        return int(row["overdue"] or 0), int(row["due_today"] or 0)
+
+    def get_requests_missing_ocr_text_page(self, *, after_id: int = 0, limit: int = 25) -> list[Request]:
+        safe_limit = max(1, min(int(limit), 100))
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.*
+                FROM requests r
+                LEFT JOIN request_search_content s ON s.request_id = r.id
+                WHERE r.id > ?
+                  AND TRIM(COALESCE(r.source_document, '')) != ''
+                  AND TRIM(COALESCE(s.ocr_text, '')) = ''
+                ORDER BY r.id ASC
+                LIMIT ?
+                """,
+                (max(0, int(after_id)), safe_limit),
+            ).fetchall()
+        return [self._row_to_request(row) for row in rows]
+
+    def count_requests_missing_fingerprint(self) -> int:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM requests WHERE TRIM(COALESCE(source_document,'')) != '' AND TRIM(COALESCE(source_sha256,'')) = ''"
+            ).fetchone()
+        return int(row[0] or 0)
+
+    def query_requests_page(
+        self,
+        *,
+        search_text: str = "",
+        search_field: str = "Все поля",
+        sender: str = "",
+        recipient: str = "",
+        status: str = "Все статусы",
+        deadline: str = "Любой",
+        date_from_iso: str = "",
+        date_to_iso: str = "",
+        sort_column: int | None = None,
+        sort_ascending: bool = True,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> tuple[list[Request], int]:
+        """Return one registry page while SQLite holds filtering/sorting state."""
+        safe_limit = max(20, min(int(limit), 1000))
+        safe_offset = max(0, int(offset))
+        where: list[str] = []
+        params: list[Any] = []
+        due_expr = self._sql_date_expr("r.due_date")
+        recv_expr = self._sql_date_expr("r.received_date")
+
+        if status == "Активные":
+            where.append("r.status != 'Исполнен'")
+        elif status == "Просрочен":
+            where.append(f"r.status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
+        elif status and status != "Все статусы":
+            where.append("r.status = ?")
+            params.append(status)
+
+        if date_from_iso:
+            where.append(f"{recv_expr} >= ?")
+            params.append(date_from_iso)
+        if date_to_iso:
+            where.append(f"{recv_expr} <= ?")
+            params.append(date_to_iso)
+
+        if deadline == "Сегодня":
+            where.append(f"r.status != 'Исполнен' AND {due_expr} = date('now','localtime')")
+        elif deadline == "Ближайшие 7 дней":
+            where.append(f"r.status != 'Исполнен' AND {due_expr} BETWEEN date('now','localtime') AND date('now','localtime','+6 day')")
+        elif deadline == "Без срока":
+            where.append("TRIM(COALESCE(r.due_date, '')) = ''")
+        elif deadline == "Просрочен":
+            where.append(f"r.status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
+
+        if sender.strip():
+            needle_text = f"%{sender.strip().casefold()}%"
+            where.append("(CASEFOLD(r.from_department) LIKE ? OR CASEFOLD(r.from_position) LIKE ? OR CASEFOLD(r.from_person) LIKE ?)")
+            params.extend([needle_text] * 3)
+        if recipient.strip():
+            where.append("CASEFOLD(r.to_person) LIKE ?")
+            params.append(f"%{recipient.strip().casefold()}%")
+
+        text = search_text.strip()
+        if text:
+            like = f"%{text.casefold()}%"
+            field_map = {
+                "Дата поступления": "r.received_date",
+                "Срок исполнения": "r.due_date",
+                "Отдел": "r.from_department",
+                "Должность": "r.from_position",
+                "От кого": "r.from_person",
+                "На кого": "r.to_person",
+                "Суть запроса": "r.request_subject",
+                "Статус": "r.status",
+            }
+            if search_field == "Все поля":
+                where.append(
+                    "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD(r.received_date) LIKE ? OR CASEFOLD(r.due_date) LIKE ? "
+                    "OR CASEFOLD(r.completed_date) LIKE ? OR CASEFOLD(r.from_department) LIKE ? "
+                    "OR CASEFOLD(r.from_position) LIKE ? OR CASEFOLD(r.from_person) LIKE ? "
+                    "OR CASEFOLD(r.to_person) LIKE ? OR CASEFOLD(r.request_subject) LIKE ? "
+                    "OR CASEFOLD(r.note) LIKE ? OR CASEFOLD(r.status) LIKE ? OR CASEFOLD(COALESCE(s.ocr_text,'')) LIKE ?)"
+                )
+                params.extend([like] * 12)
+            elif search_field in field_map:
+                where.append(f"CASEFOLD({field_map[search_field]}) LIKE ?")
+                params.append(like)
+
+        where_sql = " WHERE " + " AND ".join(where) if where else ""
+        sort_map = {
+            2: recv_expr,
+            3: due_expr,
+            4: "CASEFOLD(r.from_department)",
+            5: "CASEFOLD(r.to_person)",
+            6: "CASEFOLD(r.request_subject)",
+            7: "CASEFOLD(r.note)",
+            8: "CASEFOLD(r.status)",
+        }
+        secondary = sort_map.get(sort_column)
+        direction = "ASC" if sort_ascending else "DESC"
+        if secondary:
+            order_sql = f" ORDER BY r.is_pinned DESC, {secondary} {direction}, r.id DESC"
+        else:
+            order_sql = " ORDER BY r.is_pinned DESC, r.id DESC"
+
+        base = " FROM requests r LEFT JOIN request_search_content s ON s.request_id = r.id"
+        with self._get_connection() as conn:
+            total = int(conn.execute("SELECT COUNT(*)" + base + where_sql, params).fetchone()[0])
+            rows = conn.execute(
+                "SELECT r.*" + base + where_sql + order_sql + " LIMIT ? OFFSET ?",
+                params + [safe_limit, safe_offset],
+            ).fetchall()
+        return [self._row_to_request(row) for row in rows], total
+
     def get_requests_with_documents(self):
         with self._get_connection() as conn:
             rows = conn.execute(
@@ -499,8 +668,8 @@ class Database:
                 INSERT INTO requests (
                     received_date, due_date, completed_date, from_department, from_position,
                     from_person, to_person, request_subject, note, status,
-                    source_document, is_pinned
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_document, is_pinned, source_sha256, source_size_bytes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     request.received_date,
@@ -515,6 +684,8 @@ class Database:
                     request.status or "Новый",
                     self.encode_source_document(request.source_document),
                     1 if request.is_pinned else 0,
+                    str(request.source_sha256 or ""),
+                    int(request.source_size_bytes or 0),
                 ),
             )
             request_id = cursor.lastrowid
@@ -555,6 +726,8 @@ class Database:
                 "note": request.note or "",
                 "status": request.status or "Новый",
                 "source_document": self.encode_source_document(request.source_document),
+                "source_sha256": str(request.source_sha256 or ""),
+                "source_size_bytes": int(request.source_size_bytes or 0),
             }
 
             field_names = {
@@ -595,6 +768,7 @@ class Database:
                     from_department = ?, from_position = ?, from_person = ?,
                     to_person = ?, request_subject = ?, note = ?,
                     status = ?, source_document = ?, is_pinned = ?,
+                    source_sha256 = ?, source_size_bytes = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
@@ -611,6 +785,8 @@ class Database:
                     request.status or "Новый",
                     new_values["source_document"],
                     1 if request.is_pinned else 0,
+                    new_values["source_sha256"],
+                    new_values["source_size_bytes"],
                     request.id,
                 ),
             )
@@ -720,6 +896,8 @@ class Database:
             status=snapshot_data.get("status", "Новый"),
             source_document=self.decode_source_document(source_document),
             is_pinned=bool(snapshot_data.get("is_pinned", 0)),
+            source_sha256=str(snapshot_data.get("source_sha256", "") or ""),
+            source_size_bytes=int(snapshot_data.get("source_size_bytes", 0) or 0),
         )
 
         if existing is None:
@@ -729,8 +907,8 @@ class Database:
                     INSERT INTO requests (
                         id, received_date, due_date, completed_date, from_department, from_position,
                         from_person, to_person, request_subject, note, status,
-                        source_document, is_pinned
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        source_document, is_pinned, source_sha256, source_size_bytes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         target_id,
@@ -746,6 +924,8 @@ class Database:
                         restored_request.status,
                         self.encode_source_document(restored_request.source_document),
                         1 if restored_request.is_pinned else 0,
+                        restored_request.source_sha256,
+                        restored_request.source_size_bytes,
                     ),
                 )
                 conn.execute(
@@ -956,6 +1136,252 @@ class Database:
     def is_request_pinned(self, request_id: int) -> bool:
         request = self.get_request(request_id)
         return bool(request and request.is_pinned)
+
+    @staticmethod
+    def _fts_query(value: str) -> str:
+        tokens = [token for token in re.findall(r"[\w]+", str(value or ""), flags=re.UNICODE) if token]
+        if not tokens:
+            return ""
+        # Prefix matching is friendlier for names/organisations while quoting
+        # every token keeps FTS operators from being interpreted as user input.
+        return " AND ".join('"' + token.replace('"', '""') + '"*' for token in tokens[:12])
+
+    def set_request_ocr_text(self, request_id: int, ocr_text: str) -> None:
+        text = str(ocr_text or "").strip()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO request_search_content(request_id, ocr_text, indexed_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(request_id) DO UPDATE SET
+                    ocr_text = excluded.ocr_text,
+                    indexed_at = CURRENT_TIMESTAMP
+                """,
+                (int(request_id), text),
+            )
+
+    def get_request_ocr_text(self, request_id: int) -> str:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT ocr_text FROM request_search_content WHERE request_id = ?",
+                (int(request_id),),
+            ).fetchone()
+        return str(row["ocr_text"] or "") if row is not None else ""
+
+    def get_search_index_stats(self) -> dict[str, int]:
+        with self._get_connection() as conn:
+            total = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
+            indexed = int(conn.execute("SELECT COUNT(*) FROM request_fts").fetchone()[0])
+            with_ocr = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM request_search_content WHERE TRIM(ocr_text) != ''"
+                ).fetchone()[0]
+            )
+        return {"requests": total, "indexed": indexed, "with_ocr": with_ocr}
+
+    def search_request_ids_full_text(self, value: str, *, limit: int = 5000) -> list[int]:
+        text = str(value or "").strip()
+        if not text:
+            return [request.id for request in self.get_requests() if request.id is not None]
+        safe_limit = max(1, min(int(limit), 10000))
+        query = self._fts_query(text)
+        with self._get_connection() as conn:
+            if query:
+                try:
+                    rows = conn.execute(
+                        """
+                        SELECT CAST(request_id AS INTEGER) AS request_id
+                        FROM request_fts
+                        WHERE request_fts MATCH ?
+                        ORDER BY bm25(request_fts), rowid DESC
+                        LIMIT ?
+                        """,
+                        (query, safe_limit),
+                    ).fetchall()
+                    return [int(row["request_id"]) for row in rows]
+                except sqlite3.OperationalError:
+                    # Keep search usable on an unusual SQLite build even if FTS
+                    # parsing rejects a query. The ordinary table also contains
+                    # OCR text, so the fallback remains functionally complete.
+                    pass
+
+            like_value = f"%{text}%"
+            rows = conn.execute(
+                """
+                SELECT r.id AS request_id
+                FROM requests r
+                LEFT JOIN request_search_content s ON s.request_id = r.id
+                WHERE CAST(r.id AS TEXT) LIKE ?
+                    OR r.received_date LIKE ? OR r.due_date LIKE ? OR r.completed_date LIKE ?
+                    OR r.from_department LIKE ? OR r.from_position LIKE ?
+                    OR r.from_person LIKE ? OR r.to_person LIKE ?
+                    OR r.request_subject LIKE ? OR r.note LIKE ? OR r.status LIKE ?
+                    OR s.ocr_text LIKE ?
+                ORDER BY r.is_pinned DESC, r.id DESC
+                LIMIT ?
+                """,
+                (like_value,) * 12 + (safe_limit,),
+            ).fetchall()
+            return [int(row["request_id"]) for row in rows]
+
+    def set_document_fingerprint(self, request_id: int, sha256: str, size_bytes: int) -> None:
+        digest = str(sha256 or "").strip().lower()
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE requests SET source_sha256 = ?, source_size_bytes = ? WHERE id = ?",
+                (digest, max(0, int(size_bytes or 0)), int(request_id)),
+            )
+
+    def find_request_by_fingerprint(
+        self,
+        sha256: str,
+        size_bytes: int = 0,
+        *,
+        exclude_request_id: int | None = None,
+    ) -> Request | None:
+        digest = str(sha256 or "").strip().lower()
+        if not digest:
+            return None
+        params: list[Any] = [digest]
+        where = "source_sha256 = ?"
+        if int(size_bytes or 0) > 0:
+            where += " AND source_size_bytes = ?"
+            params.append(int(size_bytes))
+        if exclude_request_id is not None:
+            where += " AND id != ?"
+            params.append(int(exclude_request_id))
+        with self._get_connection() as conn:
+            row = conn.execute(
+                f"SELECT * FROM requests WHERE {where} ORDER BY id DESC LIMIT 1",
+                tuple(params),
+            ).fetchone()
+        return None if row is None else self._row_to_request(row)
+
+    def get_requests_missing_fingerprint(self, *, limit: int | None = None) -> list[Request]:
+        sql = (
+            "SELECT * FROM requests WHERE source_document IS NOT NULL AND source_document != '' "
+            "AND TRIM(COALESCE(source_sha256, '')) = '' ORDER BY id DESC"
+        )
+        params: tuple[Any, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (max(1, int(limit)),)
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_request(row) for row in rows]
+
+    def get_duplicate_fingerprint_groups(self) -> list[tuple[str, int, list[int]]]:
+        with self._get_connection() as conn:
+            groups = conn.execute(
+                """
+                SELECT source_sha256, source_size_bytes, COUNT(*) AS count
+                FROM requests
+                WHERE TRIM(COALESCE(source_sha256, '')) != ''
+                GROUP BY source_sha256, source_size_bytes
+                HAVING COUNT(*) > 1
+                ORDER BY count DESC, source_sha256
+                """
+            ).fetchall()
+            result: list[tuple[str, int, list[int]]] = []
+            for group in groups:
+                rows = conn.execute(
+                    "SELECT id FROM requests WHERE source_sha256 = ? AND source_size_bytes = ? ORDER BY id",
+                    (group["source_sha256"], group["source_size_bytes"]),
+                ).fetchall()
+                result.append((
+                    str(group["source_sha256"]),
+                    int(group["source_size_bytes"] or 0),
+                    [int(row["id"]) for row in rows],
+                ))
+        return result
+
+    def set_parser_metadata(self, request_id: int, diagnostics: dict[str, Any], parser_version: str) -> None:
+        payload = json.dumps(diagnostics or {}, ensure_ascii=False, separators=(",", ":"), default=str)
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO request_parser_metadata(request_id, parser_version, diagnostics_json, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(request_id) DO UPDATE SET
+                    parser_version = excluded.parser_version,
+                    diagnostics_json = excluded.diagnostics_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (int(request_id), str(parser_version or ""), payload),
+            )
+
+    def get_parser_metadata(self, request_id: int) -> dict[str, Any]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT parser_version, diagnostics_json, updated_at FROM request_parser_metadata WHERE request_id = ?",
+                (int(request_id),),
+            ).fetchone()
+        if row is None:
+            return {}
+        try:
+            diagnostics = json.loads(str(row["diagnostics_json"] or "{}"))
+        except json.JSONDecodeError:
+            diagnostics = {}
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+        diagnostics.setdefault("parser_version", str(row["parser_version"] or ""))
+        diagnostics["metadata_updated_at"] = str(row["updated_at"] or "")
+        return diagnostics
+
+    def rebuild_search_index(self) -> int:
+        searchable = (
+            "COALESCE(r.received_date, '') || ' ' || COALESCE(r.due_date, '') || ' ' || "
+            "COALESCE(r.completed_date, '') || ' ' || COALESCE(r.from_department, '') || ' ' || "
+            "COALESCE(r.from_position, '') || ' ' || COALESCE(r.from_person, '') || ' ' || "
+            "COALESCE(r.to_person, '') || ' ' || COALESCE(r.request_subject, '') || ' ' || "
+            "COALESCE(r.note, '') || ' ' || COALESCE(r.status, '') || ' ' || COALESCE(s.ocr_text, '')"
+        )
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM request_fts")
+            conn.execute(
+                f"""
+                INSERT INTO request_fts(rowid, request_id, searchable_text)
+                SELECT r.id, r.id, {searchable}
+                FROM requests r LEFT JOIN request_search_content s ON s.request_id = r.id
+                """
+            )
+            count = int(conn.execute("SELECT COUNT(*) FROM request_fts").fetchone()[0])
+        return count
+
+    def search_request_hits_full_text(self, value: str, *, limit: int = 500) -> list[dict[str, Any]]:
+        text = str(value or "").strip()
+        if not text:
+            return []
+        query = self._fts_query(text)
+        safe_limit = max(1, min(int(limit), 2000))
+        if query:
+            try:
+                with self._get_connection() as conn:
+                    rows = conn.execute(
+                        """
+                        SELECT CAST(request_id AS INTEGER) AS request_id,
+                               snippet(request_fts, 1, '⟦', '⟧', ' … ', 18) AS snippet,
+                               bm25(request_fts) AS rank
+                        FROM request_fts
+                        WHERE request_fts MATCH ?
+                        ORDER BY rank, rowid DESC
+                        LIMIT ?
+                        """,
+                        (query, safe_limit),
+                    ).fetchall()
+                return [
+                    {"request_id": int(row["request_id"]), "snippet": str(row["snippet"] or ""), "rank": float(row["rank"] or 0.0)}
+                    for row in rows
+                ]
+            except sqlite3.OperationalError:
+                pass
+        ids = self.search_request_ids_full_text(text, limit=safe_limit)
+        return [{"request_id": request_id, "snippet": "", "rank": 0.0} for request_id in ids]
+
+    def quick_check(self) -> str:
+        with self._get_connection() as conn:
+            row = conn.execute("PRAGMA quick_check").fetchone()
+        return str(row[0] if row else "unknown")
 
     def search_requests(self, field: str, value: str):
         allowed_fields = {

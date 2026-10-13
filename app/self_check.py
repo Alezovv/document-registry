@@ -99,6 +99,76 @@ def perform_self_check(
     return SelfCheckResult(ok=all(item.ok for item in items), items=items)
 
 
+
+def perform_ocr_runtime_self_check(paths: AppPaths | None = None) -> SelfCheckResult:
+    """Initialize the real OCR engine without processing a document.
+
+    This is intentionally separate from the lightweight self-check because it
+    loads PaddleOCR/ONNX models. The Windows build invokes it once after copying
+    external models, catching missing PyInstaller PaddleX pipeline resources
+    before a release ZIP is created.
+    """
+    paths = ensure_runtime_directories(paths or get_app_paths())
+    items: list[CheckItem] = []
+    try:
+        from app.ocr import OCR
+
+        engine = OCR()._get_engine()
+        items.append(
+            CheckItem(
+                "ocr:runtime",
+                engine is not None,
+                "PaddleOCR pipeline initialized",
+            )
+        )
+    except Exception as error:
+        items.append(CheckItem("ocr:runtime", False, str(error)))
+    return SelfCheckResult(ok=all(item.ok for item in items), items=items)
+
+
+
+def perform_ner_runtime_self_check(paths: AppPaths | None = None) -> SelfCheckResult:
+    """Force-load the optional ONNX NER model when it is installed.
+
+    A missing model is not an application failure because heuristic NER is a
+    supported fallback. When model files are present, however, this check runs
+    a real ONNX inference so frozen-build dependency problems are caught before
+    publishing.
+    """
+    paths = ensure_runtime_directories(paths or get_app_paths())
+    items: list[CheckItem] = []
+    try:
+        from app.ner_onnx import OnnxRussianNerEngine
+        from app.ner_runtime import default_ner_model_dir
+
+        model_dir = default_ner_model_dir(paths.models)
+        if not OnnxRussianNerEngine.required_files_present(model_dir):
+            items.append(CheckItem(
+                "ner:runtime",
+                True,
+                f"ML NER model is not installed; heuristic fallback will be used ({model_dir})",
+            ))
+            return SelfCheckResult(ok=True, items=items)
+
+        engine = OnnxRussianNerEngine(model_dir)
+        sample = "Иванов Иван Иванович находится в Москве."
+        entities = engine.extract(sample, [{
+            "text": sample,
+            "x1": 10, "y1": 10, "x2": 900, "y2": 40,
+            "page_width": 1000, "page_height": 1400,
+            "confidence": 0.99, "page_index": 0,
+        }])
+        metrics = engine.last_metrics
+        items.append(CheckItem(
+            "ner:runtime",
+            True,
+            "ONNX NER initialized and inference completed "
+            f"({metrics.get('model', '')}, {metrics.get('inference_ms', 0)} ms, entities={len(entities)})",
+        ))
+    except Exception as error:
+        items.append(CheckItem("ner:runtime", False, str(error)))
+    return SelfCheckResult(ok=all(item.ok for item in items), items=items)
+
 def write_self_check_report(result: SelfCheckResult, output: str | Path) -> Path:
     target = Path(output).expanduser().resolve(strict=False)
     target.parent.mkdir(parents=True, exist_ok=True)

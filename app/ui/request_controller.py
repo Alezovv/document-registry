@@ -1,4 +1,5 @@
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -42,11 +43,14 @@ class RequestController(QObject):
     def edit_request(self, request):
         if request is None:
             return
+        diagnostics = self.request_service.get_parser_metadata(request.id) if request.id else {}
+        presented_request = replace(request)
         dialog = RequestDialog(
             self.parent_widget,
             request=request,
             documents_dir=self.documents_dir_getter(),
             suggestions=self.request_service.get_form_suggestions(),
+            parser_diagnostics=diagnostics,
         )
         result = dialog.exec()
         if result == RequestDialog.DELETE_RESULT:
@@ -62,7 +66,11 @@ class RequestController(QObject):
         if result != QDialog.DialogCode.Accepted:
             return
         try:
-            self.request_service.update_request(dialog.get_request())
+            updated = dialog.get_request()
+            self.request_service.update_request(updated)
+            self.request_service.learn_parser_corrections(
+                presented_request, updated, context=diagnostics
+            )
         except Exception as error:
             logger.exception("Ошибка обновления запроса")
             QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось обновить запрос:\n\n{error}")
