@@ -1,0 +1,1068 @@
+{
+  "format_version": 1,
+  "model": "C:\\document-registry\\models\\ner\\rubert_tiny_news",
+  "cache": "C:\\document-registry\\data\\parser_cache",
+  "summary": {
+    "documents": 30,
+    "heuristic_mean_ms": 0.875,
+    "onnx_mean_ms": 32.733,
+    "onnx_load_ms": 350.3,
+    "mean_agreement_ratio": 0.008,
+    "mean_compatible_agreement_ratio": 0.196,
+    "mean_trusted_ml_entities": 6.867,
+    "mean_experimental_trusted_ml_entities": 31.967,
+    "mean_rss_delta_mb": 2.597
+  },
+  "documents": [
+    {
+      "key": "b03953b123ef",
+      "heuristic_ms": 1.201,
+      "onnx_ms": 31.6,
+      "heuristic_entities": 12,
+      "onnx_entities": 75,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 40,
+      "overlap": 1,
+      "agreement_ratio": 0.013,
+      "compatible_agreement_ratio": 0.207,
+      "by_label": {
+        "LOCATION": {
+          "primary": 11,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 43,
+          "baseline": 8,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 12,
+          "baseline": 2,
+          "overlap": 1,
+          "agreement_ratio": 0.077
+        }
+      },
+      "primary_only_count": 65,
+      "baseline_only_count": 10,
+      "rss_delta_mb": 77.6
+    },
+    {
+      "key": "53cd75763be5",
+      "heuristic_ms": 1.019,
+      "onnx_ms": 31.2,
+      "heuristic_entities": 14,
+      "onnx_entities": 71,
+      "trusted_ml_entities": 9,
+      "experimental_trusted_ml_entities": 37,
+      "overlap": 1,
+      "agreement_ratio": 0.013,
+      "compatible_agreement_ratio": 0.235,
+      "by_label": {
+        "LOCATION": {
+          "primary": 14,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 42,
+          "baseline": 10,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 8,
+          "baseline": 2,
+          "overlap": 1,
+          "agreement_ratio": 0.111
+        }
+      },
+      "primary_only_count": 63,
+      "baseline_only_count": 12,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "0f7d836a4bf3",
+      "heuristic_ms": 0.899,
+      "onnx_ms": 36.6,
+      "heuristic_entities": 11,
+      "onnx_entities": 75,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 38,
+      "overlap": 2,
+      "agreement_ratio": 0.028,
+      "compatible_agreement_ratio": 0.209,
+      "by_label": {
+        "LOCATION": {
+          "primary": 14,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 42,
+          "baseline": 9,
+          "overlap": 1,
+          "agreement_ratio": 0.02
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 2,
+          "overlap": 1,
+          "agreement_ratio": 0.125
+        }
+      },
+      "primary_only_count": 61,
+      "baseline_only_count": 9,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "9d8c1618ebb8",
+      "heuristic_ms": 0.693,
+      "onnx_ms": 26.2,
+      "heuristic_entities": 9,
+      "onnx_entities": 66,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 41,
+      "overlap": 1,
+      "agreement_ratio": 0.015,
+      "compatible_agreement_ratio": 0.24,
+      "by_label": {
+        "LOCATION": {
+          "primary": 19,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 33,
+          "baseline": 5,
+          "overlap": 1,
+          "agreement_ratio": 0.027
+        },
+        "PERSON": {
+          "primary": 8,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 59,
+      "baseline_only_count": 7,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "ce84cdf75f73",
+      "heuristic_ms": 0.865,
+      "onnx_ms": 31.7,
+      "heuristic_entities": 13,
+      "onnx_entities": 70,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 34,
+      "overlap": 1,
+      "agreement_ratio": 0.014,
+      "compatible_agreement_ratio": 0.265,
+      "by_label": {
+        "LOCATION": {
+          "primary": 15,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 35,
+          "baseline": 10,
+          "overlap": 1,
+          "agreement_ratio": 0.023
+        },
+        "PERSON": {
+          "primary": 10,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 59,
+      "baseline_only_count": 12,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "2693d38c28e9",
+      "heuristic_ms": 0.805,
+      "onnx_ms": 27.4,
+      "heuristic_entities": 11,
+      "onnx_entities": 75,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 37,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.209,
+      "by_label": {
+        "LOCATION": {
+          "primary": 11,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 42,
+          "baseline": 8,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 60,
+      "baseline_only_count": 11,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "305c6509faae",
+      "heuristic_ms": 0.813,
+      "onnx_ms": 27.5,
+      "heuristic_entities": 12,
+      "onnx_entities": 68,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 34,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.25,
+      "by_label": {
+        "LOCATION": {
+          "primary": 11,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 41,
+          "baseline": 8,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 3,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 59,
+      "baseline_only_count": 12,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "75e90627b3c1",
+      "heuristic_ms": 0.813,
+      "onnx_ms": 26.8,
+      "heuristic_entities": 11,
+      "onnx_entities": 73,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 39,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.214,
+      "by_label": {
+        "LOCATION": {
+          "primary": 11,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 39,
+          "baseline": 8,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 57,
+      "baseline_only_count": 11,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "4ce01f51fd7b",
+      "heuristic_ms": 0.811,
+      "onnx_ms": 27.4,
+      "heuristic_entities": 12,
+      "onnx_entities": 74,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 36,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.186,
+      "by_label": {
+        "LOCATION": {
+          "primary": 11,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 41,
+          "baseline": 8,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 8,
+          "baseline": 3,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 60,
+      "baseline_only_count": 12,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "08000e49ed25",
+      "heuristic_ms": 0.713,
+      "onnx_ms": 27.0,
+      "heuristic_entities": 13,
+      "onnx_entities": 78,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 38,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.22,
+      "by_label": {
+        "LOCATION": {
+          "primary": 17,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 45,
+          "baseline": 8,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 69,
+      "baseline_only_count": 12,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "9a541fa9590d",
+      "heuristic_ms": 0.973,
+      "onnx_ms": 35.8,
+      "heuristic_entities": 13,
+      "onnx_entities": 86,
+      "trusted_ml_entities": 5,
+      "experimental_trusted_ml_entities": 37,
+      "overlap": 1,
+      "agreement_ratio": 0.012,
+      "compatible_agreement_ratio": 0.202,
+      "by_label": {
+        "LOCATION": {
+          "primary": 18,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 42,
+          "baseline": 9,
+          "overlap": 1,
+          "agreement_ratio": 0.02
+        },
+        "PERSON": {
+          "primary": 12,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 71,
+      "baseline_only_count": 11,
+      "rss_delta_mb": 0.1
+    },
+    {
+      "key": "5a8e86df7749",
+      "heuristic_ms": 0.668,
+      "onnx_ms": 31.9,
+      "heuristic_entities": 5,
+      "onnx_entities": 62,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 24,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.119,
+      "by_label": {
+        "LOCATION": {
+          "primary": 7,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 43,
+          "baseline": 5,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 9,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 59,
+      "baseline_only_count": 5,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "9a7b8174928d",
+      "heuristic_ms": 0.425,
+      "onnx_ms": 19.1,
+      "heuristic_entities": 3,
+      "onnx_entities": 48,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 25,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.118,
+      "by_label": {
+        "LOCATION": {
+          "primary": 3,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 37,
+          "baseline": 3,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 5,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 45,
+      "baseline_only_count": 3,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "96cf7f035f3b",
+      "heuristic_ms": 0.423,
+      "onnx_ms": 19.3,
+      "heuristic_entities": 3,
+      "onnx_entities": 45,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 25,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.125,
+      "by_label": {
+        "LOCATION": {
+          "primary": 4,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 31,
+          "baseline": 3,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 42,
+      "baseline_only_count": 3,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "0b7c318e1d64",
+      "heuristic_ms": 0.536,
+      "onnx_ms": 20.4,
+      "heuristic_entities": 5,
+      "onnx_entities": 46,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 19,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.118,
+      "by_label": {
+        "LOCATION": {
+          "primary": 4,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 32,
+          "baseline": 4,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 8,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 44,
+      "baseline_only_count": 5,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "416f32dc6d3a",
+      "heuristic_ms": 0.623,
+      "onnx_ms": 23.8,
+      "heuristic_entities": 8,
+      "onnx_entities": 52,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 23,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.233,
+      "by_label": {
+        "LOCATION": {
+          "primary": 4,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 34,
+          "baseline": 5,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 13,
+          "baseline": 3,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 51,
+      "baseline_only_count": 8,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "ed663efe5152",
+      "heuristic_ms": 0.555,
+      "onnx_ms": 23.6,
+      "heuristic_entities": 6,
+      "onnx_entities": 46,
+      "trusted_ml_entities": 9,
+      "experimental_trusted_ml_entities": 23,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.231,
+      "by_label": {
+        "LOCATION": {
+          "primary": 3,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 31,
+          "baseline": 4,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 10,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 44,
+      "baseline_only_count": 6,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "21295d93064e",
+      "heuristic_ms": 1.433,
+      "onnx_ms": 56.1,
+      "heuristic_entities": 12,
+      "onnx_entities": 72,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 23,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.143,
+      "by_label": {
+        "LOCATION": {
+          "primary": 3,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 54,
+          "baseline": 10,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 8,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 65,
+      "baseline_only_count": 12,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "313d904da874",
+      "heuristic_ms": 1.092,
+      "onnx_ms": 37.3,
+      "heuristic_entities": 19,
+      "onnx_entities": 74,
+      "trusted_ml_entities": 10,
+      "experimental_trusted_ml_entities": 42,
+      "overlap": 2,
+      "agreement_ratio": 0.026,
+      "compatible_agreement_ratio": 0.344,
+      "by_label": {
+        "LOCATION": {
+          "primary": 14,
+          "baseline": 4,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 34,
+          "baseline": 10,
+          "overlap": 1,
+          "agreement_ratio": 0.023
+        },
+        "PERSON": {
+          "primary": 11,
+          "baseline": 5,
+          "overlap": 1,
+          "agreement_ratio": 0.067
+        }
+      },
+      "primary_only_count": 57,
+      "baseline_only_count": 17,
+      "rss_delta_mb": 0.1
+    },
+    {
+      "key": "911fc5155933",
+      "heuristic_ms": 1.254,
+      "onnx_ms": 60.7,
+      "heuristic_entities": 8,
+      "onnx_entities": 113,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 29,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.066,
+      "by_label": {
+        "LOCATION": {
+          "primary": 13,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 79,
+          "baseline": 6,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 8,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 100,
+      "baseline_only_count": 8,
+      "rss_delta_mb": 0.1
+    },
+    {
+      "key": "d60bba4ece7c",
+      "heuristic_ms": 1.122,
+      "onnx_ms": 47.8,
+      "heuristic_entities": 12,
+      "onnx_entities": 72,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 34,
+      "overlap": 1,
+      "agreement_ratio": 0.013,
+      "compatible_agreement_ratio": 0.19,
+      "by_label": {
+        "LOCATION": {
+          "primary": 14,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 47,
+          "baseline": 9,
+          "overlap": 1,
+          "agreement_ratio": 0.018
+        },
+        "PERSON": {
+          "primary": 4,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 64,
+      "baseline_only_count": 11,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "dbfac6452c58",
+      "heuristic_ms": 0.409,
+      "onnx_ms": 16.0,
+      "heuristic_entities": 1,
+      "onnx_entities": 25,
+      "trusted_ml_entities": 0,
+      "experimental_trusted_ml_entities": 6,
+      "overlap": 0,
+      "agreement_ratio": 0.0,
+      "compatible_agreement_ratio": 0.077,
+      "by_label": {
+        "LOCATION": {
+          "primary": 1,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 20,
+          "baseline": 0,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 4,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 25,
+      "baseline_only_count": 1,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "606b1a535f6c",
+      "heuristic_ms": 0.956,
+      "onnx_ms": 30.0,
+      "heuristic_entities": 13,
+      "onnx_entities": 69,
+      "trusted_ml_entities": 2,
+      "experimental_trusted_ml_entities": 36,
+      "overlap": 1,
+      "agreement_ratio": 0.014,
+      "compatible_agreement_ratio": 0.22,
+      "by_label": {
+        "LOCATION": {
+          "primary": 27,
+          "baseline": 3,
+          "overlap": 1,
+          "agreement_ratio": 0.034
+        },
+        "ORGANIZATION": {
+          "primary": 26,
+          "baseline": 8,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 5,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 57,
+      "baseline_only_count": 12,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "b61143607b88",
+      "heuristic_ms": 0.921,
+      "onnx_ms": 29.1,
+      "heuristic_entities": 12,
+      "onnx_entities": 69,
+      "trusted_ml_entities": 1,
+      "experimental_trusted_ml_entities": 33,
+      "overlap": 1,
+      "agreement_ratio": 0.015,
+      "compatible_agreement_ratio": 0.173,
+      "by_label": {
+        "LOCATION": {
+          "primary": 24,
+          "baseline": 3,
+          "overlap": 1,
+          "agreement_ratio": 0.038
+        },
+        "ORGANIZATION": {
+          "primary": 27,
+          "baseline": 7,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 6,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 56,
+      "baseline_only_count": 11,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "fef21dccd9cc",
+      "heuristic_ms": 1.016,
+      "onnx_ms": 38.7,
+      "heuristic_entities": 11,
+      "onnx_entities": 71,
+      "trusted_ml_entities": 6,
+      "experimental_trusted_ml_entities": 36,
+      "overlap": 1,
+      "agreement_ratio": 0.013,
+      "compatible_agreement_ratio": 0.171,
+      "by_label": {
+        "LOCATION": {
+          "primary": 14,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 44,
+          "baseline": 8,
+          "overlap": 1,
+          "agreement_ratio": 0.02
+        },
+        "PERSON": {
+          "primary": 9,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 66,
+      "baseline_only_count": 10,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "b2c31cae4f65",
+      "heuristic_ms": 1.338,
+      "onnx_ms": 44.4,
+      "heuristic_entities": 13,
+      "onnx_entities": 68,
+      "trusted_ml_entities": 8,
+      "experimental_trusted_ml_entities": 36,
+      "overlap": 1,
+      "agreement_ratio": 0.014,
+      "compatible_agreement_ratio": 0.222,
+      "by_label": {
+        "LOCATION": {
+          "primary": 14,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 41,
+          "baseline": 10,
+          "overlap": 1,
+          "agreement_ratio": 0.02
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 61,
+      "baseline_only_count": 12,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "7c5eda830abd",
+      "heuristic_ms": 1.187,
+      "onnx_ms": 48.3,
+      "heuristic_entities": 12,
+      "onnx_entities": 75,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 35,
+      "overlap": 1,
+      "agreement_ratio": 0.013,
+      "compatible_agreement_ratio": 0.184,
+      "by_label": {
+        "LOCATION": {
+          "primary": 14,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 48,
+          "baseline": 9,
+          "overlap": 1,
+          "agreement_ratio": 0.018
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 68,
+      "baseline_only_count": 11,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "eed405ec6fc0",
+      "heuristic_ms": 1.136,
+      "onnx_ms": 45.8,
+      "heuristic_entities": 12,
+      "onnx_entities": 69,
+      "trusted_ml_entities": 7,
+      "experimental_trusted_ml_entities": 33,
+      "overlap": 1,
+      "agreement_ratio": 0.013,
+      "compatible_agreement_ratio": 0.198,
+      "by_label": {
+        "LOCATION": {
+          "primary": 14,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 43,
+          "baseline": 9,
+          "overlap": 1,
+          "agreement_ratio": 0.02
+        },
+        "PERSON": {
+          "primary": 7,
+          "baseline": 1,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 63,
+      "baseline_only_count": 11,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "5274c5420f4d",
+      "heuristic_ms": 0.669,
+      "onnx_ms": 26.3,
+      "heuristic_entities": 10,
+      "onnx_entities": 57,
+      "trusted_ml_entities": 9,
+      "experimental_trusted_ml_entities": 26,
+      "overlap": 1,
+      "agreement_ratio": 0.016,
+      "compatible_agreement_ratio": 0.269,
+      "by_label": {
+        "LOCATION": {
+          "primary": 10,
+          "baseline": 2,
+          "overlap": 1,
+          "agreement_ratio": 0.091
+        },
+        "ORGANIZATION": {
+          "primary": 36,
+          "baseline": 5,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "PERSON": {
+          "primary": 9,
+          "baseline": 3,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 54,
+      "baseline_only_count": 9,
+      "rss_delta_mb": 0.0
+    },
+    {
+      "key": "0f23b348959c",
+      "heuristic_ms": 0.869,
+      "onnx_ms": 34.2,
+      "heuristic_entities": 12,
+      "onnx_entities": 85,
+      "trusted_ml_entities": 5,
+      "experimental_trusted_ml_entities": 40,
+      "overlap": 1,
+      "agreement_ratio": 0.012,
+      "compatible_agreement_ratio": 0.247,
+      "by_label": {
+        "LOCATION": {
+          "primary": 17,
+          "baseline": 2,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        },
+        "ORGANIZATION": {
+          "primary": 44,
+          "baseline": 6,
+          "overlap": 1,
+          "agreement_ratio": 0.02
+        },
+        "PERSON": {
+          "primary": 13,
+          "baseline": 3,
+          "overlap": 0,
+          "agreement_ratio": 0.0
+        }
+      },
+      "primary_only_count": 73,
+      "baseline_only_count": 10,
+      "rss_delta_mb": 0.0
+    }
+  ]
+}

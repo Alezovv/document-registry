@@ -1,0 +1,2102 @@
+{
+  "format_version": 1,
+  "database": "C:\\document-registry\\data\\requests.db",
+  "cache": "C:\\document-registry\\data\\parser_cache",
+  "privacy": "No OCR text or field values are included.",
+  "summary": {
+    "documents": 35,
+    "evaluated_fields": 204,
+    "production_compatible": 173,
+    "production_compatible_rate": 0.848,
+    "hybrid_improved": 5,
+    "hybrid_harmed": 0,
+    "mean_ab_parse_ms": 709.018,
+    "skipped_missing_pdf": 2,
+    "skipped_missing_cache": 96,
+    "fields": {
+      "received_date": {
+        "evaluated": 35,
+        "production_exact": 19,
+        "production_exact_rate": 0.5429,
+        "production_compatible": 19,
+        "production_compatible_rate": 0.5429,
+        "baseline_exact": 19,
+        "baseline_exact_rate": 0.5429,
+        "baseline_compatible": 19,
+        "baseline_compatible_rate": 0.5429,
+        "hybrid_changed": 0,
+        "hybrid_improved": 0,
+        "hybrid_harmed": 0,
+        "hybrid_neutral_or_unknown": 0
+      },
+      "from_department": {
+        "evaluated": 35,
+        "production_exact": 32,
+        "production_exact_rate": 0.9143,
+        "production_compatible": 32,
+        "production_compatible_rate": 0.9143,
+        "baseline_exact": 32,
+        "baseline_exact_rate": 0.9143,
+        "baseline_compatible": 32,
+        "baseline_compatible_rate": 0.9143,
+        "hybrid_changed": 0,
+        "hybrid_improved": 0,
+        "hybrid_harmed": 0,
+        "hybrid_neutral_or_unknown": 0
+      },
+      "from_position": {
+        "evaluated": 31,
+        "production_exact": 28,
+        "production_exact_rate": 0.9032,
+        "production_compatible": 28,
+        "production_compatible_rate": 0.9032,
+        "baseline_exact": 28,
+        "baseline_exact_rate": 0.9032,
+        "baseline_compatible": 28,
+        "baseline_compatible_rate": 0.9032,
+        "hybrid_changed": 0,
+        "hybrid_improved": 0,
+        "hybrid_harmed": 0,
+        "hybrid_neutral_or_unknown": 0
+      },
+      "from_person": {
+        "evaluated": 35,
+        "production_exact": 33,
+        "production_exact_rate": 0.9429,
+        "production_compatible": 33,
+        "production_compatible_rate": 0.9429,
+        "baseline_exact": 31,
+        "baseline_exact_rate": 0.8857,
+        "baseline_compatible": 31,
+        "baseline_compatible_rate": 0.8857,
+        "hybrid_changed": 2,
+        "hybrid_improved": 2,
+        "hybrid_harmed": 0,
+        "hybrid_neutral_or_unknown": 0
+      },
+      "to_person": {
+        "evaluated": 33,
+        "production_exact": 27,
+        "production_exact_rate": 0.8182,
+        "production_compatible": 29,
+        "production_compatible_rate": 0.8788,
+        "baseline_exact": 24,
+        "baseline_exact_rate": 0.7273,
+        "baseline_compatible": 26,
+        "baseline_compatible_rate": 0.7879,
+        "hybrid_changed": 4,
+        "hybrid_improved": 3,
+        "hybrid_harmed": 0,
+        "hybrid_neutral_or_unknown": 1
+      },
+      "request_subject": {
+        "evaluated": 35,
+        "production_exact": 30,
+        "production_exact_rate": 0.8571,
+        "production_compatible": 32,
+        "production_compatible_rate": 0.9143,
+        "baseline_exact": 30,
+        "baseline_exact_rate": 0.8571,
+        "baseline_compatible": 32,
+        "baseline_compatible_rate": 0.9143,
+        "hybrid_changed": 0,
+        "hybrid_improved": 0,
+        "hybrid_harmed": 0,
+        "hybrid_neutral_or_unknown": 0
+      }
+    }
+  },
+  "documents": [
+    {
+      "request_id": 330,
+      "cache_key": "42bb32637bf0",
+      "elapsed_ms": 1019.702,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 329,
+      "cache_key": "3e12126af97d",
+      "elapsed_ms": 546.376,
+      "evaluated_fields": 6,
+      "production_exact_hits": 4,
+      "production_compatible_hits": 4,
+      "mismatch_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "hybrid_changed_fields": [
+        "from_person"
+      ],
+      "hybrid_improved_fields": [
+        "from_person"
+      ],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": true
+        },
+        "to_person": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 328,
+      "cache_key": "5e448e29d7ec",
+      "elapsed_ms": 184.016,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 327,
+      "cache_key": "4cf0cf2b5a5e",
+      "elapsed_ms": 335.459,
+      "evaluated_fields": 6,
+      "production_exact_hits": 4,
+      "production_compatible_hits": 4,
+      "mismatch_fields": [
+        "received_date",
+        "to_person"
+      ],
+      "hybrid_changed_fields": [
+        "from_person"
+      ],
+      "hybrid_improved_fields": [
+        "from_person"
+      ],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": true
+        },
+        "to_person": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 326,
+      "cache_key": "f4321af6d5cf",
+      "elapsed_ms": 186.942,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "request_subject"
+      ],
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_improved_fields": [
+        "to_person"
+      ],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": true
+        },
+        "request_subject": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 325,
+      "cache_key": "ab44a0904757",
+      "elapsed_ms": 402.214,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 324,
+      "cache_key": "ff29c10125a5",
+      "elapsed_ms": 680.134,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 323,
+      "cache_key": "4fc723d0fb7b",
+      "elapsed_ms": 1336.506,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "to_person"
+      ],
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": true
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 322,
+      "cache_key": "38cb46843e8b",
+      "elapsed_ms": 1705.486,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 321,
+      "cache_key": "b418ffde285a",
+      "elapsed_ms": 506.778,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_improved_fields": [
+        "to_person"
+      ],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": true
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 320,
+      "cache_key": "7471eb92f38c",
+      "elapsed_ms": 995.873,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 319,
+      "cache_key": "aea555c916cb",
+      "elapsed_ms": 954.846,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 318,
+      "cache_key": "b03953b123ef",
+      "elapsed_ms": 588.628,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 317,
+      "cache_key": "53cd75763be5",
+      "elapsed_ms": 532.101,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 316,
+      "cache_key": "0f7d836a4bf3",
+      "elapsed_ms": 716.784,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_improved_fields": [
+        "to_person"
+      ],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": true
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 315,
+      "cache_key": "9d8c1618ebb8",
+      "elapsed_ms": 541.297,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 314,
+      "cache_key": "ce84cdf75f73",
+      "elapsed_ms": 596.419,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 313,
+      "cache_key": "2693d38c28e9",
+      "elapsed_ms": 628.543,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 312,
+      "cache_key": "305c6509faae",
+      "elapsed_ms": 801.359,
+      "evaluated_fields": 5,
+      "production_exact_hits": 4,
+      "production_compatible_hits": 4,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 311,
+      "cache_key": "75e90627b3c1",
+      "elapsed_ms": 720.707,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 310,
+      "cache_key": "4ce01f51fd7b",
+      "elapsed_ms": 697.516,
+      "evaluated_fields": 5,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 309,
+      "cache_key": "08000e49ed25",
+      "elapsed_ms": 419.057,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 308,
+      "cache_key": "5a8e86df7749",
+      "elapsed_ms": 284.689,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 307,
+      "cache_key": "9a7b8174928d",
+      "elapsed_ms": 122.922,
+      "evaluated_fields": 4,
+      "production_exact_hits": 3,
+      "production_compatible_hits": 3,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 306,
+      "cache_key": "96cf7f035f3b",
+      "elapsed_ms": 133.922,
+      "evaluated_fields": 4,
+      "production_exact_hits": 3,
+      "production_compatible_hits": 3,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 305,
+      "cache_key": "fef21dccd9cc",
+      "elapsed_ms": 595.631,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 304,
+      "cache_key": "7c5eda830abd",
+      "elapsed_ms": 907.054,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 303,
+      "cache_key": "eed405ec6fc0",
+      "elapsed_ms": 1282.782,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 300,
+      "cache_key": "e598836e43c0",
+      "elapsed_ms": 791.836,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 299,
+      "cache_key": "17a9693a1efb",
+      "elapsed_ms": 827.266,
+      "evaluated_fields": 6,
+      "production_exact_hits": 6,
+      "production_compatible_hits": 6,
+      "mismatch_fields": [],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 298,
+      "cache_key": "0bbaae51fae7",
+      "elapsed_ms": 820.535,
+      "evaluated_fields": 6,
+      "production_exact_hits": 5,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 297,
+      "cache_key": "0f23b348959c",
+      "elapsed_ms": 739.44,
+      "evaluated_fields": 6,
+      "production_exact_hits": 4,
+      "production_compatible_hits": 5,
+      "mismatch_fields": [
+        "received_date"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": false,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 155,
+      "cache_key": "9a6522990a07",
+      "elapsed_ms": 650.521,
+      "evaluated_fields": 6,
+      "production_exact_hits": 0,
+      "production_compatible_hits": 1,
+      "mismatch_fields": [
+        "received_date",
+        "from_department",
+        "from_position",
+        "from_person",
+        "request_subject"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": false,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 145,
+      "cache_key": "970bfcaa990c",
+      "elapsed_ms": 1725.674,
+      "evaluated_fields": 6,
+      "production_exact_hits": 1,
+      "production_compatible_hits": 2,
+      "mismatch_fields": [
+        "from_department",
+        "from_position",
+        "from_person",
+        "to_person"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": false,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        }
+      }
+    },
+    {
+      "request_id": 142,
+      "cache_key": "9a541fa9590d",
+      "elapsed_ms": 836.617,
+      "evaluated_fields": 6,
+      "production_exact_hits": 2,
+      "production_compatible_hits": 3,
+      "mismatch_fields": [
+        "received_date",
+        "from_department",
+        "request_subject"
+      ],
+      "hybrid_changed_fields": [],
+      "hybrid_improved_fields": [],
+      "hybrid_harmed_fields": [],
+      "fields": {
+        "received_date": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_department": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        },
+        "from_position": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "from_person": {
+          "production_exact": true,
+          "production_compatible": true,
+          "baseline_exact": true,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "to_person": {
+          "production_exact": false,
+          "production_compatible": true,
+          "baseline_exact": false,
+          "baseline_compatible": true,
+          "hybrid_changed": false
+        },
+        "request_subject": {
+          "production_exact": false,
+          "production_compatible": false,
+          "baseline_exact": false,
+          "baseline_compatible": false,
+          "hybrid_changed": false
+        }
+      }
+    }
+  ]
+}

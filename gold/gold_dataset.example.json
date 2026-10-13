@@ -1,0 +1,18 @@
+{
+  "format_version": 1,
+  "documents": [
+    {
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "file_name": "example.pdf",
+      "reviewed": false,
+      "expected": {
+        "received_date": "",
+        "from_department": "",
+        "from_position": "",
+        "from_person": "",
+        "to_person": "",
+        "request_subject": ""
+      }
+    }
+  ]
+}

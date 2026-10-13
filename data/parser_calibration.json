@@ -1,0 +1,1967 @@
+{
+  "format_version": 1,
+  "cache": "C:\\document-registry\\data\\parser_cache",
+  "summary": {
+    "documents": 48,
+    "mean_parse_ms": 299.343,
+    "mean_ner_agreement_ratio": 0.205,
+    "decision_counts": {
+      "autofill": 174,
+      "review": 65,
+      "empty": 49
+    },
+    "review_field_counts": {
+      "from_position": 16,
+      "to_person": 26,
+      "request_subject": 20,
+      "from_person": 3
+    },
+    "trusted_ml_label_counts": {
+      "ORGANIZATION": 249,
+      "PERSON": 52
+    },
+    "hybrid_changed_field_counts": {
+      "to_person": 13,
+      "from_department": 1,
+      "from_person": 1
+    }
+  },
+  "documents": [
+    {
+      "key": "ab44a0904757",
+      "elapsed_ms": 730.739,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.282,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 4,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.891,
+        "from_department": 0.99,
+        "from_position": 0.792,
+        "from_person": 0.885,
+        "to_person": 0.841,
+        "request_subject": 0.825
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "ff29c10125a5",
+      "elapsed_ms": 211.913,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.128,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 4
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "empty",
+        "to_person": "empty",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "from_position",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.86,
+        "from_department": 0.99,
+        "from_position": 0.836,
+        "from_person": 0.0,
+        "to_person": 0.0,
+        "request_subject": 0.798
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 0,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "4fc723d0fb7b",
+      "elapsed_ms": 362.221,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.286,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 3
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.859,
+        "from_department": 0.99,
+        "from_position": 0.799,
+        "from_person": 0.885,
+        "to_person": 0.99,
+        "request_subject": 0.793
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 16,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "970bfcaa990c",
+      "elapsed_ms": 477.881,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.208,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 3
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "from_position",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.847,
+        "from_person": 0.89,
+        "to_person": 0.99,
+        "request_subject": 0.814
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 10,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "38cb46843e8b",
+      "elapsed_ms": 489.016,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.226,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 3,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.875,
+        "from_department": 0.99,
+        "from_position": 0.879,
+        "from_person": 0.83,
+        "to_person": 0.895,
+        "request_subject": 0.829
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 10,
+        "from_position": 1,
+        "from_person": 3,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "9a6522990a07",
+      "elapsed_ms": 161.513,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.235,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.793,
+        "from_person": 0.885,
+        "to_person": 0.843,
+        "request_subject": 0.826
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 15,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "4847d95896be",
+      "elapsed_ms": 112.432,
+      "document_type": "other",
+      "document_type_confidence": 0.35,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.0,
+      "trusted_ml_entity_counts": {},
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "empty",
+        "from_person": "empty",
+        "to_person": "empty",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.943,
+        "from_position": 0.0,
+        "from_person": 0.0,
+        "to_person": 0.0,
+        "request_subject": 0.792
+      },
+      "hybrid_changed_fields": [
+        "from_department"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 1,
+        "from_position": 0,
+        "from_person": 0,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "b418ffde285a",
+      "elapsed_ms": 126.605,
+      "document_type": "letter",
+      "document_type_confidence": 0.64,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.233,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 6,
+        "PERSON": 2
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.878,
+        "from_person": 0.913,
+        "to_person": 0.99,
+        "request_subject": 0.828
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 10,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 2,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "22a0f3831adb",
+      "elapsed_ms": 333.817,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.247,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 6,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "empty",
+        "from_person": "review",
+        "to_person": "autofill",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.888,
+        "from_department": 0.99,
+        "from_position": 0.0,
+        "from_person": 0.99,
+        "to_person": 0.99,
+        "request_subject": 0.825
+      },
+      "hybrid_changed_fields": [
+        "from_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 13,
+        "from_position": 0,
+        "from_person": 2,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "7471eb92f38c",
+      "elapsed_ms": 285.619,
+      "document_type": "request",
+      "document_type_confidence": 0.8,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.269,
+      "trusted_ml_entity_counts": {
+        "PERSON": 4,
+        "ORGANIZATION": 2
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.867,
+        "from_department": 0.765,
+        "from_position": 0.878,
+        "from_person": 0.862,
+        "to_person": 0.896,
+        "request_subject": 0.826
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 5,
+        "from_position": 1,
+        "from_person": 4,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "aea555c916cb",
+      "elapsed_ms": 274.947,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.196,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 1,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.847,
+        "from_department": 0.99,
+        "from_position": 0.876,
+        "from_person": 0.916,
+        "to_person": 0.899,
+        "request_subject": 0.808
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 4,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "9773d1d763d4",
+      "elapsed_ms": 67.098,
+      "document_type": "other",
+      "document_type_confidence": 0.35,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.0,
+      "trusted_ml_entity_counts": {},
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "empty",
+        "from_position": "empty",
+        "from_person": "empty",
+        "to_person": "empty",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.98,
+        "from_department": 0.0,
+        "from_position": 0.0,
+        "from_person": 0.0,
+        "to_person": 0.0,
+        "request_subject": 0.779
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 0,
+        "from_position": 0,
+        "from_person": 0,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "b03953b123ef",
+      "elapsed_ms": 143.152,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.215,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 5,
+        "PERSON": 3
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.874,
+        "from_person": 0.99,
+        "to_person": 0.99,
+        "request_subject": 0.813
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 13,
+        "from_position": 1,
+        "from_person": 3,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "53cd75763be5",
+      "elapsed_ms": 148.305,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.225,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 5,
+        "PERSON": 3
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.768,
+        "from_person": 0.99,
+        "to_person": 0.99,
+        "request_subject": 0.808
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 14,
+        "from_position": 1,
+        "from_person": 3,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "0f7d836a4bf3",
+      "elapsed_ms": 309.357,
+      "document_type": "request",
+      "document_type_confidence": 0.8,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.233,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 2
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.889,
+        "from_department": 0.99,
+        "from_position": 0.881,
+        "from_person": 0.99,
+        "to_person": 0.99,
+        "request_subject": 0.824
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 17,
+        "from_position": 1,
+        "from_person": 3,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "9d8c1618ebb8",
+      "elapsed_ms": 264.956,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.253,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 6,
+        "PERSON": 2
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.856,
+        "from_person": 0.83,
+        "to_person": 0.99,
+        "request_subject": 0.814
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 13,
+        "from_position": 1,
+        "from_person": 3,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "ce84cdf75f73",
+      "elapsed_ms": 337.656,
+      "document_type": "request",
+      "document_type_confidence": 0.8,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.262,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 8
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.894,
+        "from_department": 0.881,
+        "from_position": 0.876,
+        "from_person": 0.917,
+        "to_person": 0.898,
+        "request_subject": 0.828
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 16,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "2693d38c28e9",
+      "elapsed_ms": 368.386,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.225,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.793,
+        "from_person": 0.885,
+        "to_person": 0.844,
+        "request_subject": 0.827
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 14,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "305c6509faae",
+      "elapsed_ms": 417.063,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.256,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 6,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "empty",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.98,
+        "from_department": 0.99,
+        "from_position": 0.0,
+        "from_person": 0.885,
+        "to_person": 0.844,
+        "request_subject": 0.824
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 13,
+        "from_position": 0,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "75e90627b3c1",
+      "elapsed_ms": 418.774,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.23,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.789,
+        "from_person": 0.885,
+        "to_person": 0.844,
+        "request_subject": 0.826
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 15,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "4ce01f51fd7b",
+      "elapsed_ms": 400.738,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.198,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 6,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "empty",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.0,
+        "from_person": 0.885,
+        "to_person": 0.844,
+        "request_subject": 0.824
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 14,
+        "from_position": 0,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "08000e49ed25",
+      "elapsed_ms": 246.764,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.242,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 8,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "review",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "from_position",
+        "from_person",
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.769,
+        "from_person": 0.857,
+        "to_person": 0.812,
+        "request_subject": 0.798
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 16,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "9a541fa9590d",
+      "elapsed_ms": 465.314,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.218,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 5,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.877,
+        "from_person": 0.885,
+        "to_person": 0.99,
+        "request_subject": 0.83
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 12,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "5a8e86df7749",
+      "elapsed_ms": 262.162,
+      "document_type": "response",
+      "document_type_confidence": 0.698,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.147,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "empty",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.878,
+        "from_person": 0.888,
+        "to_person": 0.0,
+        "request_subject": 0.818
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "9a7b8174928d",
+      "elapsed_ms": 112.182,
+      "document_type": "request",
+      "document_type_confidence": 0.8,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.122,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "empty",
+        "from_person": "autofill",
+        "to_person": "empty",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.0,
+        "from_person": 0.885,
+        "to_person": 0.0,
+        "request_subject": 0.83
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 0,
+        "from_person": 1,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "96cf7f035f3b",
+      "elapsed_ms": 122.004,
+      "document_type": "request",
+      "document_type_confidence": 0.8,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.115,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "empty",
+        "from_person": "autofill",
+        "to_person": "empty",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.0,
+        "from_person": 0.885,
+        "to_person": 0.0,
+        "request_subject": 0.823
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 0,
+        "from_person": 1,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "0b7c318e1d64",
+      "elapsed_ms": 151.686,
+      "document_type": "response",
+      "document_type_confidence": 0.6,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.122,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "empty",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.876,
+        "from_person": 0.99,
+        "to_person": 0.0,
+        "request_subject": 0.817
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 2,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "416f32dc6d3a",
+      "elapsed_ms": 203.634,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.222,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.879,
+        "from_person": 0.916,
+        "to_person": 0.99,
+        "request_subject": 0.822
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "ed663efe5152",
+      "elapsed_ms": 199.483,
+      "document_type": "letter",
+      "document_type_confidence": 0.64,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.255,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 3
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.799,
+        "from_person": 0.909,
+        "to_person": 0.99,
+        "request_subject": 0.826
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 2,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "21295d93064e",
+      "elapsed_ms": 804.982,
+      "document_type": "other",
+      "document_type_confidence": 0.35,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.143,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "empty",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.0,
+        "from_person": 0.839,
+        "to_person": 0.736,
+        "request_subject": 0.819
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 0,
+        "from_person": 2,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "313d904da874",
+      "elapsed_ms": 449.073,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.362,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 4
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.98,
+        "from_department": 0.99,
+        "from_position": 0.877,
+        "from_person": 0.99,
+        "to_person": 0.99,
+        "request_subject": 0.814
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 16,
+        "from_position": 1,
+        "from_person": 5,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "911fc5155933",
+      "elapsed_ms": 537.306,
+      "document_type": "other",
+      "document_type_confidence": 0.35,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.082,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "review",
+        "to_person": "autofill",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "from_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.878,
+        "from_person": 0.84,
+        "to_person": 0.829,
+        "request_subject": 0.804
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "d60bba4ece7c",
+      "elapsed_ms": 658.877,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.22,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.964,
+        "from_department": 0.776,
+        "from_position": 0.862,
+        "from_person": 0.893,
+        "to_person": 0.883,
+        "request_subject": 0.819
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 16,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "dbfac6452c58",
+      "elapsed_ms": 134.808,
+      "document_type": "other",
+      "document_type_confidence": 0.35,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.121,
+      "trusted_ml_entity_counts": {},
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "empty",
+        "from_position": "empty",
+        "from_person": "empty",
+        "to_person": "empty",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.0,
+        "from_position": 0.0,
+        "from_person": 0.0,
+        "to_person": 0.0,
+        "request_subject": 0.822
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 0,
+        "from_position": 0,
+        "from_person": 0,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "606b1a535f6c",
+      "elapsed_ms": 320.584,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.238,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 2,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.893,
+        "from_department": 0.99,
+        "from_position": 0.878,
+        "from_person": 0.885,
+        "to_person": 0.843,
+        "request_subject": 0.82
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 9,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "b61143607b88",
+      "elapsed_ms": 262.836,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.193,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.869,
+        "from_department": 0.99,
+        "from_position": 0.88,
+        "from_person": 0.885,
+        "to_person": 0.898,
+        "request_subject": 0.819
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 7,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "fef21dccd9cc",
+      "elapsed_ms": 318.037,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.203,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 6
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position"
+      ],
+      "field_confidence": {
+        "received_date": 0.892,
+        "from_department": 0.99,
+        "from_position": 0.857,
+        "from_person": 0.885,
+        "to_person": 0.901,
+        "request_subject": 0.821
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 14,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "b2c31cae4f65",
+      "elapsed_ms": 331.711,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.222,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.885,
+        "from_department": 0.777,
+        "from_position": 0.873,
+        "from_person": 0.91,
+        "to_person": 0.896,
+        "request_subject": 0.825
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 17,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "7c5eda830abd",
+      "elapsed_ms": 345.27,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.202,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.879,
+        "from_department": 0.769,
+        "from_position": 0.858,
+        "from_person": 0.901,
+        "to_person": 0.879,
+        "request_subject": 0.82
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 16,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "eed405ec6fc0",
+      "elapsed_ms": 328.062,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.22,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.968,
+        "from_department": 0.762,
+        "from_position": 0.853,
+        "from_person": 0.884,
+        "to_person": 0.877,
+        "request_subject": 0.821
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 16,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "5274c5420f4d",
+      "elapsed_ms": 106.492,
+      "document_type": "letter",
+      "document_type_confidence": 0.64,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.261,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 7,
+        "PERSON": 2
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "empty",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.879,
+        "from_person": 0.0,
+        "to_person": 0.99,
+        "request_subject": 0.823
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 0,
+        "to_person": 2,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "0f23b348959c",
+      "elapsed_ms": 191.788,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.26,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 5,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.892,
+        "from_department": 0.99,
+        "from_position": 0.79,
+        "from_person": 0.921,
+        "to_person": 0.843,
+        "request_subject": 0.828
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "35cb7e082566",
+      "elapsed_ms": 193.411,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.215,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 5,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.891,
+        "from_department": 0.99,
+        "from_position": 0.869,
+        "from_person": 0.885,
+        "to_person": 0.99,
+        "request_subject": 0.829
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 13,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "fe51ec373693",
+      "elapsed_ms": 221.796,
+      "document_type": "letter",
+      "document_type_confidence": 0.64,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.337,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 6,
+        "PERSON": 3
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "empty",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "autofill"
+      },
+      "review_fields": [
+        "to_person"
+      ],
+      "field_confidence": {
+        "received_date": 0.98,
+        "from_department": 0.99,
+        "from_position": 0.0,
+        "from_person": 0.99,
+        "to_person": 0.84,
+        "request_subject": 0.827
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 14,
+        "from_position": 0,
+        "from_person": 3,
+        "to_person": 4,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "e598836e43c0",
+      "elapsed_ms": 215.825,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.263,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 4,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "autofill",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.98,
+        "from_department": 0.99,
+        "from_position": 0.877,
+        "from_person": 0.914,
+        "to_person": 0.897,
+        "request_subject": 0.814
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 10,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "17a9693a1efb",
+      "elapsed_ms": 223.98,
+      "document_type": "request",
+      "document_type_confidence": 0.8,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.148,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 3,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "empty",
+        "from_department": "autofill",
+        "from_position": "review",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "from_position",
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.0,
+        "from_department": 0.99,
+        "from_position": 0.82,
+        "from_person": 0.99,
+        "to_person": 0.803,
+        "request_subject": 0.801
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 0,
+        "from_department": 10,
+        "from_position": 1,
+        "from_person": 3,
+        "to_person": 1,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "4f723ab1ebce",
+      "elapsed_ms": 280.014,
+      "document_type": "request",
+      "document_type_confidence": 0.763,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.122,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 3,
+        "PERSON": 1
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "review",
+        "request_subject": "review"
+      },
+      "review_fields": [
+        "to_person",
+        "request_subject"
+      ],
+      "field_confidence": {
+        "received_date": 0.895,
+        "from_department": 0.754,
+        "from_position": 0.873,
+        "from_person": 0.912,
+        "to_person": 0.99,
+        "request_subject": 0.803
+      },
+      "hybrid_changed_fields": [
+        "to_person"
+      ],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 11,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 3,
+        "request_subject": 1
+      }
+    },
+    {
+      "key": "0bbaae51fae7",
+      "elapsed_ms": 238.205,
+      "document_type": "request",
+      "document_type_confidence": 0.95,
+      "ner_engine": "onnx-rubert-tiny-news-int8-v1",
+      "ner_compatible_agreement_ratio": 0.164,
+      "trusted_ml_entity_counts": {
+        "ORGANIZATION": 3
+      },
+      "field_decisions": {
+        "received_date": "autofill",
+        "from_department": "autofill",
+        "from_position": "autofill",
+        "from_person": "autofill",
+        "to_person": "empty",
+        "request_subject": "autofill"
+      },
+      "review_fields": [],
+      "field_confidence": {
+        "received_date": 0.891,
+        "from_department": 0.865,
+        "from_position": 0.867,
+        "from_person": 0.885,
+        "to_person": 0.0,
+        "request_subject": 0.823
+      },
+      "hybrid_changed_fields": [],
+      "hybrid_candidate_counts": {
+        "received_date": 1,
+        "from_department": 9,
+        "from_position": 1,
+        "from_person": 1,
+        "to_person": 0,
+        "request_subject": 1
+      }
+    }
+  ]
+}
