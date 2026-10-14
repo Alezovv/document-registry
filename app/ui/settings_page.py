@@ -447,7 +447,8 @@ class SettingsPage(QWidget):
         self.confirm_delete.setChecked(confirm_delete)
         save = QPushButton("Сохранить настройки")
         save.setMinimumHeight(40)
-        save.setMaximumWidth(190)
+        save.setMinimumWidth(200)
+        save.setMaximumWidth(240)
         save.setStyleSheet(
             f"""
             QPushButton {{ background-color:{PRIMARY_COLOR}; color:white; border-radius:10px; padding:8px 18px; font-weight:700; }}

@@ -19,6 +19,7 @@ import zipfile
 
 from app import __version__ as UPDATER_VERSION
 from app.db_migrations import capture_invariants, downgrade_database
+from app.text_encoding import loads_json_with_fallback
 from app.updater_status import UpdaterDisplay, UpdaterStatusReporter
 
 FORMAT_VERSION = 1
@@ -79,7 +80,7 @@ def read_staged_manifest(staging: Path, expected_version: str) -> dict:
     if not manifest.is_file():
         raise InstallError("В пакете отсутствует update_manifest.json.")
     try:
-        raw = json.loads(manifest.read_text(encoding="utf-8-sig"))
+        raw = loads_json_with_fallback(manifest)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise InstallError(f"Не удалось прочитать внутренний manifest: {error}") from error
     if not isinstance(raw, dict):
@@ -282,7 +283,7 @@ def _target_version(target: Path) -> str:
     if not version_file.is_file():
         return "unknown"
     try:
-        raw = json.loads(version_file.read_text(encoding="utf-8-sig"))
+        raw = loads_json_with_fallback(version_file)
         return str(raw.get("version") or "unknown").strip() or "unknown"
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return "unknown"
@@ -294,7 +295,7 @@ def _decode_documents_dir(target: Path) -> Path:
     if not settings.is_file():
         return default
     try:
-        raw = json.loads(settings.read_text(encoding="utf-8-sig"))
+        raw = loads_json_with_fallback(settings)
         value = str(raw.get("documents_dir") or "").strip()
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, AttributeError):
         return default
@@ -348,16 +349,43 @@ def _save_dedicated_rollback_db_copy(
     rollback_dir = target / "backups" / "rollback"
     try:
         rollback_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_cur = re.sub(r"[^A-Za-z0-9._-]", "_", str(current_version or "current"))
         safe_tgt = re.sub(r"[^A-Za-z0-9._-]", "_", str(target_version or "older"))
-        base = f"requests_before_rollback_v{safe_cur}_to_v{safe_tgt}_{stamp}"
+        prefix = f"requests_before_rollback_v{safe_cur}_to_v{safe_tgt}_"
+
+        # Avoid creating a duplicate snapshot if the GUI already saved one right before launching updater
+        now_ts = time.time()
+        for existing_db in sorted(rollback_dir.glob(f"{prefix}*.db"), reverse=True):
+            try:
+                if existing_db.is_file() and (now_ts - existing_db.stat().st_mtime) < 180.0:
+                    return existing_db
+            except OSError:
+                continue
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = f"{prefix}{stamp}"
         dest_db = rollback_dir / f"{base}.db"
         suffix = 1
         while dest_db.exists():
             dest_db = rollback_dir / f"{base}_{suffix}.db"
             suffix += 1
         shutil.copy2(completed_db, dest_db)
+
+        requests_count = 0
+        history_count = 0
+        try:
+            with closing(sqlite3.connect(dest_db, timeout=10.0)) as conn:
+                tables = {
+                    str(r[0])
+                    for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                }
+                if "requests" in tables:
+                    requests_count = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
+                if "request_history" in tables:
+                    history_count = int(conn.execute("SELECT COUNT(*) FROM request_history").fetchone()[0])
+        except sqlite3.Error:
+            pass
+
         meta = {
             "kind": "pre_rollback_database_backup",
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -367,6 +395,8 @@ def _save_dedicated_rollback_db_copy(
             "target_schema": int(target_schema if target_schema is not None else old_schema),
             "database_file": dest_db.name,
             "database_path": str(dest_db),
+            "requests_count": requests_count,
+            "history_count": history_count,
             "verified": True,
         }
         dest_db.with_suffix(".json").write_text(
@@ -585,7 +615,7 @@ def _prepare_migrated_database(
     if not report.is_file():
         raise InstallError("Новая версия не создала отчёт миграции БД.")
     try:
-        raw = json.loads(report.read_text(encoding="utf-8-sig"))
+        raw = loads_json_with_fallback(report)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise InstallError(f"Не удалось прочитать отчёт миграции БД: {error}") from error
     if not bool(raw.get("ok")) or int(raw.get("schema_version", -1)) != target_schema:

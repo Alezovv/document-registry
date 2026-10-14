@@ -11,6 +11,18 @@ param(
 $ErrorActionPreference = "Stop"
 $PackagingDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $PackagingDir
+
+if (-not $Version) {
+    $InitFile = Join-Path $Root "app\__init__.py"
+    if (Test-Path -LiteralPath $InitFile -PathType Leaf) {
+        $InitSource = Get-Content -LiteralPath $InitFile -Raw
+        if ($InitSource -match '__version__\s*=\s*["'']([^"'']+)["'']') {
+            $Version = [string]$Matches[1]
+            Write-Host "Auto-detected version from app\__init__.py: $Version" -ForegroundColor Cyan
+        }
+    }
+}
+
 $BuildDir = Join-Path $Root "build"
 $DistDir = Join-Path $Root "dist"
 $PortableDir = Join-Path $DistDir "DocumentRegistry"

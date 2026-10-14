@@ -261,22 +261,11 @@ class RegistryPage(QWidget):
         filter_row.addWidget(self.clear_search_button)
         layout.addLayout(filter_row)
 
-        party_row = QHBoxLayout()
-        party_row.setSpacing(10)
-        party_label = QLabel("Стороны:")
-        party_label.setStyleSheet("color:#475467; font-size:12px; font-weight:500;")
-        self.sender_filter = QLineEdit()
-        self.sender_filter.setPlaceholderText("Отправитель / отдел")
-        self.sender_filter.setClearButtonEnabled(True)
-        self.sender_filter.setFixedHeight(34)
-        self.recipient_filter = QLineEdit()
-        self.recipient_filter.setPlaceholderText("Адресат")
-        self.recipient_filter.setClearButtonEnabled(True)
-        self.recipient_filter.setFixedHeight(34)
-        party_row.addWidget(party_label)
-        party_row.addWidget(self.sender_filter, 1)
-        party_row.addWidget(self.recipient_filter, 1)
-        layout.addLayout(party_row)
+        # Поля «Стороны» и «Адресат» скрыты из интерфейса, чтобы освободить место для таблицы запросов
+        self.sender_filter = QLineEdit(card)
+        self.sender_filter.hide()
+        self.recipient_filter = QLineEdit(card)
+        self.recipient_filter.hide()
 
         quick_row = QHBoxLayout()
         quick_row.setSpacing(7)
@@ -829,7 +818,7 @@ class RegistryPage(QWidget):
         filtered = []
         for request in self.requests:
             if selected_status == "Активные":
-                if request.status == "Исполнен":
+                if request.status in ("Исполнен", "Отклонен"):
                     continue
             elif selected_status != "Все статусы" and request.display_status() != selected_status:
                 continue
@@ -853,10 +842,11 @@ class RegistryPage(QWidget):
                     continue
 
             due_julian = int(cached.get("due", 0))
-            if selected_deadline == "Сегодня" and due_julian != today_julian:
-                continue
+            if selected_deadline == "Сегодня":
+                if request.status in ("Исполнен", "Отклонен") or due_julian != today_julian:
+                    continue
             if selected_deadline == "Ближайшие 7 дней":
-                if not due_julian or not (today_julian <= due_julian <= today_julian + 6):
+                if request.status in ("Исполнен", "Отклонен") or not due_julian or not (today_julian <= due_julian <= today_julian + 6):
                     continue
             if selected_deadline == "Без срока" and due_julian:
                 continue

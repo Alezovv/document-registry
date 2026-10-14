@@ -187,7 +187,28 @@ class Database:
                     """
                     UPDATE requests
                     SET status = 'Новый'
-                    WHERE status IN ('РќРѕРІС‹Р№', 'РќРѕРІС‹Р№')
+                    WHERE status IN ('РќРѕРІС‹Р№', 'Р СњР С•Р Р†РЎвЂ№Р в„–', 'Р СњР С•Р Р†РЎвЂ№Р в„–')
+                    """
+                )
+                conn.execute(
+                    """
+                    UPDATE requests
+                    SET status = 'В работе'
+                    WHERE status IN ('Р’ СЂР°Р±РѕС‚Рµ', 'Р вЂ™ РЎР‚Р В°Р В±Р С•РЎвЂљР Вµ')
+                    """
+                )
+                conn.execute(
+                    """
+                    UPDATE requests
+                    SET status = 'Исполнен'
+                    WHERE status IN ('РСЃРїРѕР»РЅРµРЅ', 'Р�СЃРїРѕР»РЅРµРЅ', 'Р пїЅРЎРѓР С—Р С•Р В»Р Р…Р ВµР Р…')
+                    """
+                )
+                conn.execute(
+                    """
+                    UPDATE requests
+                    SET status = 'Отклонен'
+                    WHERE status IN ('РћС‚РєР»РѕРЅРµРЅ', 'Р С›РЎвЂљР С”Р В»Р С•Р Р…Р ВµР Р…', 'Отклонён')
                     """
                 )
         except sqlite3.Error:
@@ -452,15 +473,17 @@ class Database:
 
     def get_registry_status_counts(self) -> dict[str, int]:
         due_expr = self._sql_date_expr("due_date")
+        active_overdue = f"(status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} != '' AND {due_expr} < date('now','localtime'))"
         with self._get_connection() as conn:
             row = conn.execute(
                 f"""
                 SELECT
                     COUNT(*) AS total,
-                    SUM(CASE WHEN status = 'Новый' AND NOT (status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime')) THEN 1 ELSE 0 END) AS new_count,
-                    SUM(CASE WHEN status = 'В работе' AND NOT (status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime')) THEN 1 ELSE 0 END) AS progress_count,
+                    SUM(CASE WHEN status = 'Новый' AND NOT {active_overdue} THEN 1 ELSE 0 END) AS new_count,
+                    SUM(CASE WHEN status = 'В работе' AND NOT {active_overdue} THEN 1 ELSE 0 END) AS progress_count,
                     SUM(CASE WHEN status = 'Исполнен' THEN 1 ELSE 0 END) AS done_count,
-                    SUM(CASE WHEN status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime') THEN 1 ELSE 0 END) AS overdue_count
+                    SUM(CASE WHEN status = 'Отклонен' THEN 1 ELSE 0 END) AS rejected_count,
+                    SUM(CASE WHEN {active_overdue} THEN 1 ELSE 0 END) AS overdue_count
                 FROM requests
                 """
             ).fetchone()
@@ -469,6 +492,7 @@ class Database:
             "Новый": int(row["new_count"] or 0),
             "В работе": int(row["progress_count"] or 0),
             "Исполнен": int(row["done_count"] or 0),
+            "Отклонен": int(row["rejected_count"] or 0),
             "Просрочен": int(row["overdue_count"] or 0),
         }
 
@@ -478,8 +502,8 @@ class Database:
             row = conn.execute(
                 f"""
                 SELECT
-                    SUM(CASE WHEN status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime') THEN 1 ELSE 0 END) AS overdue,
-                    SUM(CASE WHEN status != 'Исполнен' AND {due_expr} = date('now','localtime') THEN 1 ELSE 0 END) AS due_today
+                    SUM(CASE WHEN status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} != '' AND {due_expr} < date('now','localtime') THEN 1 ELSE 0 END) AS overdue,
+                    SUM(CASE WHEN status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} = date('now','localtime') THEN 1 ELSE 0 END) AS due_today
                 FROM requests
                 """
             ).fetchone()
@@ -535,9 +559,12 @@ class Database:
         recv_expr = self._sql_date_expr("r.received_date")
 
         if status == "Активные":
-            where.append("r.status != 'Исполнен'")
+            where.append("r.status NOT IN ('Исполнен', 'Отклонен')")
         elif status == "Просрочен":
-            where.append(f"r.status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
+            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
+        elif status in ("Новый", "В работе"):
+            where.append(f"r.status = ? AND NOT ({due_expr} != '' AND {due_expr} < date('now','localtime'))")
+            params.append(status)
         elif status and status != "Все статусы":
             where.append("r.status = ?")
             params.append(status)
@@ -550,13 +577,13 @@ class Database:
             params.append(date_to_iso)
 
         if deadline == "Сегодня":
-            where.append(f"r.status != 'Исполнен' AND {due_expr} = date('now','localtime')")
+            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} = date('now','localtime')")
         elif deadline == "Ближайшие 7 дней":
-            where.append(f"r.status != 'Исполнен' AND {due_expr} BETWEEN date('now','localtime') AND date('now','localtime','+6 day')")
+            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} BETWEEN date('now','localtime') AND date('now','localtime','+6 day')")
         elif deadline == "Без срока":
             where.append("TRIM(COALESCE(r.due_date, '')) = ''")
         elif deadline == "Просрочен":
-            where.append(f"r.status != 'Исполнен' AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
+            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
 
         if sender.strip():
             needle_text = f"%{sender.strip().casefold()}%"

@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QProgressDialog
 
 from app.db_migrations import DatabaseRollbackComparison
+from app.text_encoding import repair_cyrillic_mojibake
 from app.ui.dialogs.rollback_dialog import RollbackVersionDialog
 from app.update_service import (
     SavedDatabaseBackup,
@@ -222,7 +223,7 @@ class UpdateController(QObject):
         message.setText(
             f"DocumentRegistry {self.current_version} → {info.version}"
         )
-        details = info.notes or "Исправления и улучшения приложения."
+        details = repair_cyrillic_mojibake(info.notes) or "Исправления и улучшения приложения."
         size_mb = info.size_bytes / (1024 * 1024)
         message.setInformativeText(
             details
@@ -276,14 +277,38 @@ class UpdateController(QObject):
             self.current_version,
             list(versions or []),
             initial_error=error_text,
+            backup_service=self.backup_service,
+            toast=self.toast,
             parent=self.parent(),
         )
+        dialog.database_restored.connect(self._on_database_restored)
+        dialog.database_merged.connect(self._on_database_merged)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         info = dialog.selected_update_info()
         if info is None:
             return
         self._confirm_and_start_rollback(info, dialog.current_comparison())
+
+    def _on_database_restored(self) -> None:
+        parent = self.parent()
+        if parent is not None:
+            if hasattr(parent, "_after_backup_restore"):
+                parent._after_backup_restore()
+            elif hasattr(parent, "load_requests"):
+                parent.load_requests()
+        if callable(self.toast):
+            self.toast("База данных восстановлена", "База данных успешно восстановлена из сохранённого снимка.", "success")
+
+    def _on_database_merged(self) -> None:
+        parent = self.parent()
+        if parent is not None:
+            if hasattr(parent, "_after_backup_restore"):
+                parent._after_backup_restore()
+            elif hasattr(parent, "load_requests"):
+                parent.load_requests()
+        if callable(self.toast):
+            self.toast("Слияние завершено", "Записи успешно объединены с текущей базой данных без потери данных.", "success")
 
     def _confirm_and_start_rollback(
         self,
@@ -505,6 +530,7 @@ class UpdateController(QObject):
                 info,
                 rollback=is_rollback,
                 current_version=self.current_version,
+                pre_saved_backup=saved_backup,
             )
             # Do not close the main application until the standalone updater has
             # positively confirmed that a visible install-status window (or its

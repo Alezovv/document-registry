@@ -9,8 +9,6 @@ __pycache__/
 coverage.xml
 htmlcov/
 /tests/
-tests
-test_.py
 # Virtual environments
 .venv/
 venv/
@@ -21,18 +19,21 @@ ENV/
 build/
 dist/
 release/
-
+/tools/
 # Runtime application data
-data/*.db
-data/*.db-shm
-data/*.db-wal
-data/*.sqlite
-data/*.sqlite3
-data/documents/
-data/parser_cache/
-data/paddle_cache/
-data/updates/
-data/parser_corrections.json
+/gold/
+/data/
+
+#data/*.db
+#data/*.db-shm
+#data/*.db-wal
+#data/*.sqlite
+#data/*.sqlite3
+#data/documents/
+#data/parser_cache/
+#data/paddle_cache/
+#data/updates/
+#data/parser_corrections.json
 
 # Backups / logs / diagnostics
 backups/

@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 from typing import Callable, Iterable
 
+from app.text_encoding import loads_json_with_fallback, repair_cyrillic_mojibake
+
 CURRENT_SCHEMA_VERSION = 7
 
 PRESERVED_REQUEST_COLUMNS = (
@@ -519,7 +521,8 @@ def _user_tables(conn: sqlite3.Connection) -> set[str]:
     }
     filtered: set[str] = set()
     for name in raw_tables:
-        if name == "sqlite_sequence":
+        # Ignore internal SQLite tables (sqlite_sequence, sqlite_stat1..4 created by PRAGMA optimize, etc.)
+        if name.lower().startswith("sqlite_"):
             continue
         if name.startswith("request_fts_"):
             continue
@@ -567,8 +570,17 @@ def compare_database_for_rollback(
             target_req_cols = set(request_columns_for_schema(target_schema))
             target_hist_cols = set(history_columns_for_schema(target_schema))
 
-            extra_req_cols = tuple(sorted(req_cols - target_req_cols))
-            extra_hist_cols = tuple(sorted(hist_cols - target_hist_cols))
+            if current_schema > target_schema:
+                extra_req_cols = tuple(sorted(req_cols - target_req_cols))
+                extra_hist_cols = tuple(sorted(hist_cols - target_hist_cols))
+            else:
+                # When rolling back between builds with the same (or newer target) schema version,
+                # tables are not rebuilt and legacy/custom user columns (e.g. pp_number) are preserved.
+                # Only flag columns that belong to a newer known schema (> target_schema).
+                newer_known_req = set(PRESERVED_REQUEST_COLUMNS) - target_req_cols
+                newer_known_hist = set(PRESERVED_HISTORY_COLUMNS) - target_hist_cols
+                extra_req_cols = tuple(sorted(req_cols & newer_known_req))
+                extra_hist_cols = tuple(sorted(hist_cols & newer_known_hist))
 
             current_requests_count = (
                 int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])

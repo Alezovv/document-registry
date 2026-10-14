@@ -6,6 +6,7 @@ from typing import Optional
 
 
 _DATE_FORMAT = "%d.%m.%Y"
+TERMINAL_STATUSES: frozenset[str] = frozenset({"Исполнен", "Отклонен", "Отклонён"})
 
 
 @dataclass
@@ -34,7 +35,7 @@ class Request:
             return None
 
     def is_overdue(self, reference_date: date | None = None) -> bool:
-        if self.status == "Исполнен":
+        if self.status in TERMINAL_STATUSES:
             return False
         due = self._parse_date(self.due_date)
         if due is None:
@@ -42,7 +43,7 @@ class Request:
         return due < (reference_date or date.today())
 
     def is_due_today(self, reference_date: date | None = None) -> bool:
-        if self.status == "Исполнен":
+        if self.status in TERMINAL_STATUSES:
             return False
         due = self._parse_date(self.due_date)
         return bool(due and due == (reference_date or date.today()))

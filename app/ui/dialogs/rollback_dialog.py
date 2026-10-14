@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -10,18 +11,26 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 from app.db_migrations import DatabaseRollbackComparison, get_schema_version
+from app.text_encoding import repair_cyrillic_mojibake
 from app.ui.date_controls import NoWheelComboBox
+from app.ui.dialogs.rollback_database_tab import RollbackDatabaseTab
 from app.ui.styles import PRIMARY_COLOR, PRIMARY_HOVER
 from app.update_service import UpdateError, UpdateInfo, UpdateService
 
 
 class RollbackVersionDialog(QDialog):
     """Dialog for selecting an older version, viewing its description, and inspecting DB differences."""
+
+    database_restored = Signal()
+    database_merged = Signal()
 
     def __init__(
         self,
@@ -30,19 +39,23 @@ class RollbackVersionDialog(QDialog):
         versions: list[UpdateInfo],
         *,
         initial_error: str = "",
+        backup_service=None,
+        toast=None,
         parent=None,
     ):
         super().__init__(parent)
         self.service = service
+        self.backup_service = backup_service
+        self.toast = toast
         self.current_version = str(current_version or "").strip()
         self._versions: list[UpdateInfo] = list(versions or [])
         self._selected_info: UpdateInfo | None = None
         self._current_comparison: DatabaseRollbackComparison | None = None
         self._initial_error = str(initial_error or "").strip()
 
-        self.setWindowTitle("Откат на предыдущую версию")
-        self.setMinimumSize(660, 540)
-        self.resize(700, 580)
+        self.setWindowTitle("Управление версиями и базами данных")
+        self.setMinimumSize(840, 580)
+        self.resize(880, 630)
         self._build_ui()
         self._populate_versions()
 
@@ -54,24 +67,37 @@ class RollbackVersionDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 20)
-        root.setSpacing(14)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
 
-        title = QLabel("Откат на старую версию")
-        title.setStyleSheet("font-size:22px; font-weight:750; color:#0F172A;")
+        title = QLabel("Управление версиями и базами данных")
+        title.setStyleSheet("font-size:20px; font-weight:750; color:#0F172A;")
         current_schema = get_schema_version(self.service._database_path)
         subtitle = QLabel(
-            f"Текущая установленная версия: {self.current_version} (схема БД v{current_schema}). "
-            "Основной режим работы — обновление вперёд; откат используйте при необходимости вернуться к прежней сборке."
+            f"Текущая установленная версия: {self.current_version} (схема БД v{current_schema})."
         )
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("color:#64748B; font-size:12px;")
         root.addWidget(title)
         root.addWidget(subtitle)
 
+        self.tabs = QTabWidget(self)
+        self.tabs.setStyleSheet(
+            "QTabWidget::pane { border:1px solid #E2E8F0; border-radius:10px; background:#FFFFFF; }"
+            "QTabBar::tab { background:#F1F5F9; color:#475467; font-weight:650; font-size:12px; "
+            "padding:8px 18px; border-top-left-radius:8px; border-top-right-radius:8px; margin-right:4px; }"
+            f"QTabBar::tab:selected {{ background:#FFFFFF; color:#0F172A; border-bottom:2px solid {PRIMARY_COLOR}; }}"
+        )
+
+        # ── Вкладка 1: Откат версии программы ─────────────────
+        versions_tab = QWidget()
+        v_layout = QVBoxLayout(versions_tab)
+        v_layout.setContentsMargins(16, 14, 16, 14)
+        v_layout.setSpacing(12)
+
         if self._initial_error:
             net_banner = QLabel(
-                f"Примечание: {self._initial_error}\n"
+                f"Примечание: {repair_cyrillic_mojibake(self._initial_error)}\n"
                 "Вы можете выбрать локальный пакет обновления (.zip) вручную."
             )
             net_banner.setWordWrap(True)
@@ -79,11 +105,12 @@ class RollbackVersionDialog(QDialog):
                 "background:#FFF7ED; color:#9A3412; border:1px solid #FED7AA; "
                 "border-radius:9px; padding:9px 12px; font-size:11px; font-weight:600;"
             )
-            root.addWidget(net_banner)
+            v_layout.addWidget(net_banner)
 
-        selector_card = QFrame(self)
+        selector_card = QFrame(versions_tab)
+        selector_card.setObjectName("selectorCard")
         selector_card.setStyleSheet(
-            "QFrame { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:11px; }"
+            "QFrame#selectorCard { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:11px; }"
         )
         selector_layout = QVBoxLayout(selector_card)
         selector_layout.setContentsMargins(16, 14, 16, 14)
@@ -101,9 +128,11 @@ class RollbackVersionDialog(QDialog):
 
         self.choose_file_button = QPushButton("Выбрать пакет (.zip)…", selector_card)
         self.choose_file_button.setMinimumHeight(40)
+        self.choose_file_button.setMinimumWidth(190)
+        self.choose_file_button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.choose_file_button.setStyleSheet(
             "QPushButton { background:#F8FAFC; color:#344054; border:1px solid #D0D5DD; "
-            "border-radius:9px; padding:8px 14px; font-weight:650; } "
+            "border-radius:9px; padding:8px 16px; font-weight:650; } "
             "QPushButton:hover { background:#F1F5F9; border-color:#98A2B3; }"
         )
         self.choose_file_button.clicked.connect(self._choose_local_package)
@@ -116,22 +145,23 @@ class RollbackVersionDialog(QDialog):
         self.version_meta_label.setWordWrap(True)
         self.version_meta_label.setStyleSheet("color:#475467; font-size:11px; border:none;")
         selector_layout.addWidget(self.version_meta_label)
-        root.addWidget(selector_card)
+        v_layout.addWidget(selector_card)
 
         desc_label = QLabel("Описание выбранной версии")
         desc_label.setStyleSheet("font-size:13px; font-weight:700; color:#1E293B;")
-        root.addWidget(desc_label)
+        v_layout.addWidget(desc_label)
 
-        self.description_box = QTextEdit(self)
+        self.description_box = QTextEdit(versions_tab)
         self.description_box.setReadOnly(True)
-        self.description_box.setMinimumHeight(130)
+        self.description_box.setMinimumHeight(110)
         self.description_box.setStyleSheet(
             "QTextEdit { background:#F8FAFC; color:#1E293B; border:1px solid #E2E8F0; "
             "border-radius:10px; padding:10px; font-size:12px; }"
         )
-        root.addWidget(self.description_box, 1)
+        v_layout.addWidget(self.description_box, 1)
 
-        self.db_warning_frame = QFrame(self)
+        self.db_warning_frame = QFrame(versions_tab)
+        self.db_warning_frame.setObjectName("dbWarningFrame")
         db_layout = QVBoxLayout(self.db_warning_frame)
         db_layout.setContentsMargins(14, 12, 14, 12)
         db_layout.setSpacing(6)
@@ -143,25 +173,16 @@ class RollbackVersionDialog(QDialog):
         self.db_warning_body.setStyleSheet("font-size:11px; border:none;")
         db_layout.addWidget(self.db_warning_title)
         db_layout.addWidget(self.db_warning_body)
-        root.addWidget(self.db_warning_frame)
-
-        saved_dbs = self.service.list_saved_rollback_databases()
-        if saved_dbs:
-            latest = saved_dbs[0]
-            saved_hint = QLabel(
-                f"Последняя сохранённая при откате БД: v{latest.get('source_version', '?')} → "
-                f"v{latest.get('target_version', '?')} ({latest.get('database_file', '')})"
-            )
-            saved_hint.setWordWrap(True)
-            saved_hint.setStyleSheet("color:#64748B; font-size:11px;")
-            root.addWidget(saved_hint)
+        v_layout.addWidget(self.db_warning_frame)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
         buttons.addStretch()
 
-        self.cancel_button = QPushButton("Отмена", self)
+        self.cancel_button = QPushButton("Отмена", versions_tab)
         self.cancel_button.setMinimumHeight(40)
+        self.cancel_button.setMinimumWidth(115)
+        self.cancel_button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.cancel_button.setStyleSheet(
             "QPushButton { background:#FFFFFF; color:#344054; border:1px solid #D0D5DD; "
             "border-radius:10px; padding:8px 18px; font-weight:650; } "
@@ -169,8 +190,10 @@ class RollbackVersionDialog(QDialog):
         )
         self.cancel_button.clicked.connect(self.reject)
 
-        self.rollback_button = QPushButton("Откатиться на выбранную версию", self)
+        self.rollback_button = QPushButton("Откатиться на выбранную версию", versions_tab)
         self.rollback_button.setMinimumHeight(40)
+        self.rollback_button.setMinimumWidth(265)
+        self.rollback_button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.rollback_button.setStyleSheet(
             f"QPushButton {{ background:{PRIMARY_COLOR}; color:white; border:none; "
             "border-radius:10px; padding:8px 20px; font-weight:700; } "
@@ -181,7 +204,21 @@ class RollbackVersionDialog(QDialog):
 
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.rollback_button)
-        root.addLayout(buttons)
+        v_layout.addLayout(buttons)
+
+        self.tabs.addTab(versions_tab, "Доступные версии для отката")
+
+        # ── Вкладка 2: Сохранённые снимки БД ──────────────────
+        self.database_tab = RollbackDatabaseTab(
+            self.service,
+            backup_service=self.backup_service,
+            toast=self.toast,
+            parent=self,
+        )
+        self.database_tab.database_restored.connect(self.database_restored.emit)
+        self.database_tab.database_merged.connect(self.database_merged.emit)
+        self.tabs.addTab(self.database_tab, "Сохранённые снимки БД")
+        root.addWidget(self.tabs, 1)
 
     def _populate_versions(self) -> None:
         self.version_combo.blockSignals(True)
@@ -210,7 +247,7 @@ class RollbackVersionDialog(QDialog):
                 "Доступные старые версии не найдены в manifest.json или локальном кэше."
             )
             self.db_warning_frame.setStyleSheet(
-                "QFrame { background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; }"
+                "QFrame#dbWarningFrame { background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; }"
             )
             self.db_warning_title.setStyleSheet("color:#334155; font-size:12px; font-weight:700; border:none;")
             self.db_warning_title.setText("Ожидание выбора версии")
@@ -244,7 +281,7 @@ class RollbackVersionDialog(QDialog):
             f"Источник: {source_text}"
         )
 
-        notes_text = (info.notes or "").strip()
+        notes_text = repair_cyrillic_mojibake((info.notes or "").strip())
         if not notes_text:
             notes_text = f"Версия DocumentRegistry {info.version}.\nПодробное описание изменений для этой сборки не указано."
         self.description_box.setPlainText(notes_text)
@@ -254,7 +291,7 @@ class RollbackVersionDialog(QDialog):
         except Exception as error:
             comparison = None
             self.db_warning_frame.setStyleSheet(
-                "QFrame { background:#FFF7ED; border:1px solid #FED7AA; border-radius:10px; }"
+                "QFrame#dbWarningFrame { background:#FFF7ED; border:1px solid #FED7AA; border-radius:10px; }"
             )
             self.db_warning_title.setStyleSheet("color:#9A3412; font-size:12px; font-weight:750; border:none;")
             self.db_warning_title.setText("Предупреждение проверки базы данных")
@@ -268,7 +305,7 @@ class RollbackVersionDialog(QDialog):
         self._current_comparison = comparison
         if comparison.has_differences:
             self.db_warning_frame.setStyleSheet(
-                "QFrame { background:#FFFBEB; border:1px solid #FDE68A; border-radius:10px; }"
+                "QFrame#dbWarningFrame { background:#FFFBEB; border:1px solid #FDE68A; border-radius:10px; }"
             )
             self.db_warning_title.setStyleSheet("color:#92400E; font-size:12px; font-weight:750; border:none;")
             self.db_warning_title.setText(
@@ -283,7 +320,7 @@ class RollbackVersionDialog(QDialog):
             )
         else:
             self.db_warning_frame.setStyleSheet(
-                "QFrame { background:#F0FDF4; border:1px solid #BBF7D0; border-radius:10px; }"
+                "QFrame#dbWarningFrame { background:#F0FDF4; border:1px solid #BBF7D0; border-radius:10px; }"
             )
             self.db_warning_title.setStyleSheet("color:#166534; font-size:12px; font-weight:750; border:none;")
             self.db_warning_title.setText(

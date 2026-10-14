@@ -33,6 +33,7 @@ from app.db_migrations import (
     downgrade_database,
     get_schema_version,
 )
+from app.text_encoding import loads_json_with_fallback, repair_cyrillic_mojibake
 from app.update_history import append_update_history, load_update_history
 from app.update_config import (
     MAX_MANIFEST_BYTES,
@@ -196,7 +197,7 @@ class UpdateService:
         """
         path = self.paths.data / "update_status.json"
         try:
-            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+            raw = loads_json_with_fallback(path)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return None
         if not isinstance(raw, dict):
@@ -328,8 +329,8 @@ class UpdateService:
                 names = set(archive.namelist())
                 if "update_manifest.json" not in names:
                     raise UpdateError("В архиве отсутствует update_manifest.json.")
-                raw_manifest = json.loads(
-                    archive.read("update_manifest.json").decode("utf-8-sig")
+                raw_manifest = loads_json_with_fallback(
+                    archive.read("update_manifest.json")
                 )
         except UpdateError:
             raise
@@ -396,7 +397,7 @@ class UpdateService:
         if not manifest_path.is_file():
             raise UpdateNotReady("manifest.json не найден в локальной папке обновлений.")
         try:
-            raw = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            raw = loads_json_with_fallback(manifest_path)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
             raise UpdateNotReady(f"Не удалось прочитать manifest.json: {error}") from error
 
@@ -439,7 +440,7 @@ class UpdateService:
         # a stable file ID and names the exact package file ID for each release.
         manifest_bytes = self._read_drive_file(self.manifest_file_id, MAX_MANIFEST_BYTES)
         try:
-            raw = json.loads(manifest_bytes.decode("utf-8-sig"))
+            raw = loads_json_with_fallback(manifest_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise UpdateError(f"Некорректный manifest.json на Google Drive: {error}") from error
 
@@ -484,7 +485,7 @@ class UpdateService:
         if not manifest_path.is_file():
             raise UpdateNotReady("manifest.json не найден в локальной папке обновлений.")
         try:
-            raw = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            raw = loads_json_with_fallback(manifest_path)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
             raise UpdateNotReady(f"Не удалось прочитать manifest.json: {error}") from error
 
@@ -542,7 +543,7 @@ class UpdateService:
     ) -> list[UpdateInfo]:
         manifest_bytes = self._read_drive_file(self.manifest_file_id, MAX_MANIFEST_BYTES)
         try:
-            raw = json.loads(manifest_bytes.decode("utf-8-sig"))
+            raw = loads_json_with_fallback(manifest_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise UpdateError(f"Некорректный manifest.json на Google Drive: {error}") from error
 
@@ -581,8 +582,13 @@ class UpdateService:
             if key in raw and raw[key]:
                 val = raw[key]
                 if isinstance(val, list):
-                    return "\n".join(str(item).strip() for item in val if str(item).strip())
-                return str(val).strip()
+                    text = "\n".join(
+                        repair_cyrillic_mojibake(str(item).strip())
+                        for item in val
+                        if str(item).strip()
+                    )
+                    return repair_cyrillic_mojibake(text)
+                return repair_cyrillic_mojibake(str(val).strip())
         return ""
 
     def _parse_single_entry(self, entry: dict):
@@ -714,7 +720,7 @@ class UpdateService:
                     continue
                 if manifest_file.is_file():
                     try:
-                        meta = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
+                        meta = loads_json_with_fallback(manifest_file)
                         if str(meta.get("source_version") or "").strip() == str(target_version).strip():
                             return db_file
                     except Exception:
@@ -858,7 +864,7 @@ class UpdateService:
         items: list[dict] = []
         for meta_file in sorted(self.rollback_backups_dir.glob("*.json"), reverse=True):
             try:
-                raw = json.loads(meta_file.read_text(encoding="utf-8-sig"))
+                raw = loads_json_with_fallback(meta_file)
                 if isinstance(raw, dict):
                     items.append(raw)
             except Exception:
@@ -1254,6 +1260,7 @@ class UpdateService:
         *,
         rollback: bool = False,
         current_version: str | None = None,
+        pre_saved_backup: SavedDatabaseBackup | None = None,
     ) -> subprocess.Popen:
         install_root = self.paths.executable_dir
 
@@ -1270,14 +1277,16 @@ class UpdateService:
 
         restore_copy: Path | None = None
         if rollback:
-            # Ensure the current database is backed up to backups/rollback/ and,
-            # if its schema is newer than the rollback target, downgraded so even
-            # a legacy updater/executable inside an older package can validate it.
-            self.save_database_before_rollback(
-                current_version=current_version or "current",
-                target_version=info.version,
-                target_schema=info.database_schema,
-            )
+            # Ensure the current database is backed up to backups/rollback/ (unless
+            # already saved by UpdateController) and, if its schema is newer than
+            # the rollback target, downgraded so even a legacy updater/executable
+            # inside an older package can validate it.
+            if pre_saved_backup is None:
+                self.save_database_before_rollback(
+                    current_version=current_version or "current",
+                    target_version=info.version,
+                    target_schema=info.database_schema,
+                )
             restore_copy = self._downgrade_live_database_for_rollback(info.database_schema)
 
         command = [
@@ -1342,7 +1351,7 @@ class UpdateService:
                     "Откройте Центр диагностики и журнал updater.log."
                 )
             try:
-                raw = json.loads(status_path.read_text(encoding="utf-8-sig"))
+                raw = loads_json_with_fallback(status_path)
             except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                 raw = None
             if isinstance(raw, dict):
