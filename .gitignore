@@ -8,7 +8,9 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
-
+/tests/
+tests
+test_.py
 # Virtual environments
 .venv/
 venv/
