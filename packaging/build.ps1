@@ -1,8 +1,8 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "1.28.7",
+    [string]$Version = "1.28.8",
     [string]$PublishTo = "",
-    [string]$ReleaseNotes = "DocumentRegistry 1.28.7: подсветка и поиск дубликатов, компактный вид реестра (8-10 строк), ограничение истории до 2000 записей.",
+    [string]$ReleaseNotes = "DocumentRegistry 1.28.8: поддержка длинных путей Windows (MAX_PATH) при создании резервной копии, подсветка и поиск дубликатов, компактный вид реестра (8-10 строк), ограничение истории до 2000 записей.",
     [string]$PackageFileId = "",
     [switch]$PublishExisting,
     [switch]$ManifestOnly
