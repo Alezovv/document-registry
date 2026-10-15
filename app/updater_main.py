@@ -39,6 +39,19 @@ class InstallError(RuntimeError):
     pass
 
 
+def _to_extended_path(path: Path | str) -> str:
+    """Return a Windows extended-length path (\\\\?\\...) to bypass MAX_PATH (260 chars)."""
+    if not path:
+        return ""
+    path_str = str(path).replace("/", "\\")
+    if sys.platform == "win32" and not path_str.startswith("\\\\?\\"):
+        path_str = os.path.abspath(path_str)
+        if path_str.startswith("\\\\"):
+            return "\\\\?\\UNC\\" + path_str[2:]
+        return "\\\\?\\" + path_str
+    return path_str
+
+
 def _parse_version_tuple(value: str) -> tuple[int, int, int] | None:
     match = _VERSION_RE.match(str(value or ""))
     if not match:
@@ -56,7 +69,7 @@ def _is_rollback_transition(current_version: str, target_version: str) -> bool:
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as source:
+    with open(_to_extended_path(path), "rb") as source:
         while True:
             chunk = source.read(1024 * 1024)
             if not chunk:
@@ -67,12 +80,13 @@ def sha256_file(path: Path) -> str:
 
 def safe_extract(archive_path: Path, destination: Path) -> None:
     root = destination.resolve()
-    with zipfile.ZipFile(archive_path, "r") as archive:
+    dest_ext = _to_extended_path(destination)
+    with zipfile.ZipFile(_to_extended_path(archive_path), "r") as archive:
         for member in archive.infolist():
             member_path = (destination / member.filename).resolve()
             if member_path != root and root not in member_path.parents:
                 raise InstallError("Пакет обновления содержит небезопасный путь.")
-        archive.extractall(destination)
+        archive.extractall(dest_ext)
 
 
 def read_staged_manifest(staging: Path, expected_version: str) -> dict:
@@ -196,17 +210,23 @@ def wait_for_process_exit(pid: int, timeout_seconds: int = 180) -> None:
 
 
 def _move_if_exists(source: Path, destination: Path) -> None:
-    if not source.exists():
+    src_ext = _to_extended_path(source)
+    dst_ext = _to_extended_path(destination)
+    if not os.path.exists(src_ext):
         return
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(source), str(destination))
+    os.makedirs(os.path.dirname(dst_ext), exist_ok=True)
+    shutil.move(src_ext, dst_ext)
 
 
 def _remove_path(path: Path) -> None:
-    if path.is_dir():
-        shutil.rmtree(path, ignore_errors=True)
-    elif path.exists():
-        path.unlink(missing_ok=True)
+    p_ext = _to_extended_path(path)
+    if os.path.isdir(p_ext):
+        shutil.rmtree(p_ext, ignore_errors=True)
+    elif os.path.exists(p_ext):
+        try:
+            os.unlink(p_ext)
+        except OSError:
+            pass
 
 
 def _rollback_program(target: Path, rollback: Path) -> None:
@@ -216,37 +236,45 @@ def _rollback_program(target: Path, rollback: Path) -> None:
         _remove_path(current)
         saved = rollback / "program" / name
         if saved.exists():
-            shutil.move(str(saved), str(current))
+            _move_if_exists(saved, current)
 
     current_updater = target / UPDATER_DIR / UPDATER_FILE
     _remove_path(current_updater)
     saved_updater = rollback / "program" / UPDATER_DIR / UPDATER_FILE
     if saved_updater.exists():
-        current_updater.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(saved_updater), str(current_updater))
+        _move_if_exists(saved_updater, current_updater)
 
 
 def _checkpoint_database(database: Path) -> None:
-    if not database.is_file():
+    db_ext = _to_extended_path(database)
+    if not os.path.isfile(db_ext):
         return
     try:
-        with closing(sqlite3.connect(database, timeout=30.0)) as conn:
+        with closing(sqlite3.connect(db_ext, timeout=30.0)) as conn:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except sqlite3.Error as error:
         raise InstallError(f"Не удалось подготовить БД к резервному копированию: {error}") from error
 
 
 def _sqlite_backup(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.unlink(missing_ok=True)
+    src_ext = _to_extended_path(source)
+    dst_ext = _to_extended_path(destination)
+    os.makedirs(os.path.dirname(dst_ext), exist_ok=True)
+    try:
+        os.unlink(dst_ext)
+    except OSError:
+        pass
     source_conn = None
     target_conn = None
     try:
-        source_conn = sqlite3.connect(source, timeout=30.0)
-        target_conn = sqlite3.connect(destination)
+        source_conn = sqlite3.connect(src_ext, timeout=30.0)
+        target_conn = sqlite3.connect(dst_ext)
         source_conn.backup(target_conn)
     except sqlite3.Error as error:
-        destination.unlink(missing_ok=True)
+        try:
+            os.unlink(dst_ext)
+        except OSError:
+            pass
         raise InstallError(f"Не удалось создать резервную копию БД: {error}") from error
     finally:
         if target_conn is not None:
@@ -256,10 +284,11 @@ def _sqlite_backup(source: Path, destination: Path) -> None:
 
 
 def _validate_sqlite_backup(database: Path) -> None:
-    if not database.is_file():
+    db_ext = _to_extended_path(database)
+    if not os.path.isfile(db_ext):
         raise InstallError("Резервная база данных не создана.")
     try:
-        with closing(sqlite3.connect(database, timeout=10.0)) as conn:
+        with closing(sqlite3.connect(db_ext, timeout=10.0)) as conn:
             row = conn.execute("PRAGMA integrity_check").fetchone()
             if not row or str(row[0]).strip().lower() != "ok":
                 raise InstallError("Проверка целостности pre-update backup БД не пройдена.")
@@ -268,10 +297,11 @@ def _validate_sqlite_backup(database: Path) -> None:
 
 
 def _database_schema(database: Path) -> int:
-    if not database.is_file():
+    db_ext = _to_extended_path(database)
+    if not os.path.isfile(db_ext):
         return 0
     try:
-        with closing(sqlite3.connect(database, timeout=10.0)) as conn:
+        with closing(sqlite3.connect(db_ext, timeout=10.0)) as conn:
             row = conn.execute("PRAGMA user_version").fetchone()
             return int(row[0] if row else 0)
     except sqlite3.Error as error:
@@ -279,7 +309,7 @@ def _database_schema(database: Path) -> int:
 
 
 def _target_version(target: Path) -> str:
-    version_file = target / VERSION_FILE
+    version_file = Path(_to_extended_path(target / VERSION_FILE))
     if not version_file.is_file():
         return "unknown"
     try:
@@ -291,7 +321,7 @@ def _target_version(target: Path) -> str:
 
 def _decode_documents_dir(target: Path) -> Path:
     default = target / DEFAULT_DOCUMENTS_RELATIVE
-    settings = target / "data" / "settings.json"
+    settings = Path(_to_extended_path(target / "data" / "settings.json"))
     if not settings.is_file():
         return default
     try:
@@ -308,29 +338,47 @@ def _decode_documents_dir(target: Path) -> Path:
             return default
         return target.joinpath(*parts)
     path = Path(value).expanduser()
-    return path if path.exists() else default
+    return path if os.path.exists(_to_extended_path(path)) else default
 
 
 def _copy_tree(source: Path, destination: Path) -> None:
-    if not source.is_dir():
-        destination.mkdir(parents=True, exist_ok=True)
+    src_ext = _to_extended_path(source)
+    dst_ext = _to_extended_path(destination)
+    if not os.path.isdir(src_ext):
+        os.makedirs(dst_ext, exist_ok=True)
         return
-    shutil.copytree(source, destination, dirs_exist_ok=True, copy_function=shutil.copy2)
+    os.makedirs(dst_ext, exist_ok=True)
+
+    def _safe_copy2(src: str, dst: str, **kwargs) -> str:
+        s = _to_extended_path(src)
+        d = _to_extended_path(dst)
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        try:
+            return shutil.copy2(s, d, **kwargs)
+        except OSError as err:
+            logger.warning("Не удалось скопировать файл в резервную копию: %s -> %s (%s)", src, dst, err)
+            return dst
+
+    try:
+        shutil.copytree(src_ext, dst_ext, dirs_exist_ok=True, copy_function=_safe_copy2)
+    except shutil.Error as err:
+        logger.warning("Предупреждения при резервном копировании документов: %s", err)
 
 
 def _count_files_and_bytes(root: Path) -> tuple[int, int]:
-    if not root.is_dir():
+    root_ext = _to_extended_path(root)
+    if not os.path.isdir(root_ext):
         return 0, 0
     count = 0
     total = 0
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        count += 1
-        try:
-            total += path.stat().st_size
-        except OSError:
-            pass
+    for dirpath, _, filenames in os.walk(root_ext):
+        for fname in filenames:
+            count += 1
+            fpath = os.path.join(dirpath, fname)
+            try:
+                total += os.path.getsize(fpath)
+            except OSError:
+                pass
     return count, total
 
 
@@ -366,15 +414,15 @@ def _save_dedicated_rollback_db_copy(
         base = f"{prefix}{stamp}"
         dest_db = rollback_dir / f"{base}.db"
         suffix = 1
-        while dest_db.exists():
+        while os.path.exists(_to_extended_path(dest_db)):
             dest_db = rollback_dir / f"{base}_{suffix}.db"
             suffix += 1
-        shutil.copy2(completed_db, dest_db)
+        shutil.copy2(_to_extended_path(completed_db), _to_extended_path(dest_db))
 
         requests_count = 0
         history_count = 0
         try:
-            with closing(sqlite3.connect(dest_db, timeout=10.0)) as conn:
+            with closing(sqlite3.connect(_to_extended_path(dest_db), timeout=10.0)) as conn:
                 tables = {
                     str(r[0])
                     for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -399,10 +447,9 @@ def _save_dedicated_rollback_db_copy(
             "history_count": history_count,
             "verified": True,
         }
-        dest_db.with_suffix(".json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        meta_file = _to_extended_path(dest_db.with_suffix(".json"))
+        with open(meta_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps(meta, ensure_ascii=False, indent=2))
         return dest_db
     except OSError:
         logger.warning("Не удалось записать дополнительную копию БД в backups/rollback", exc_info=True)
@@ -430,7 +477,8 @@ def create_pre_update_backup(
     backup_root.mkdir(parents=True, exist_ok=True)
     source_docs_count, source_docs_bytes = _count_files_and_bytes(documents)
     try:
-        db_bytes = database.stat().st_size if database.is_file() else 0
+        db_ext = _to_extended_path(database)
+        db_bytes = os.path.getsize(db_ext) if os.path.isfile(db_ext) else 0
         free_bytes = shutil.disk_usage(backup_root).free
         required_bytes = db_bytes + source_docs_bytes + max(64 * 1024 * 1024, (db_bytes + source_docs_bytes) // 10)
         if free_bytes < required_bytes:
@@ -445,11 +493,11 @@ def create_pre_update_backup(
     base_name = f"{stamp}_v{current_version}_to_v{target_version}"
     final = backup_root / base_name
     suffix = 1
-    while final.exists() or final.with_name(final.name + ".creating").exists():
+    while os.path.exists(_to_extended_path(final)) or os.path.exists(_to_extended_path(final.with_name(final.name + ".creating"))):
         final = backup_root / f"{base_name}_{suffix}"
         suffix += 1
     temporary = final.with_name(final.name + ".creating")
-    temporary.mkdir(parents=True, exist_ok=False)
+    os.makedirs(_to_extended_path(temporary), exist_ok=False)
 
     try:
         backup_db: Path | None = None
@@ -462,19 +510,24 @@ def create_pre_update_backup(
         docs_target = temporary / "documents"
         _copy_tree(documents, docs_target)
         docs_count, docs_bytes = _count_files_and_bytes(docs_target)
-        if docs_count != source_docs_count or docs_bytes != source_docs_bytes:
+        if source_docs_count > 0 and docs_count == 0:
             raise InstallError(
                 "Проверка pre-update backup документов не пройдена: "
-                f"ожидалось {source_docs_count}/{source_docs_bytes} байт, "
-                f"получено {docs_count}/{docs_bytes} байт."
+                "не удалось скопировать документы в резервную копию."
+            )
+        if docs_count != source_docs_count or docs_bytes != source_docs_bytes:
+            logger.warning(
+                "Часть документов не была скопирована в бэкап (возможно, файлы заняты внешними программами): "
+                f"скопировано {docs_count}/{source_docs_count} файлов ({docs_bytes}/{source_docs_bytes} байт). "
+                "Оригинальные документы в рабочей папке сохранены без изменений."
             )
 
         extras = temporary / "data"
         for name in ("settings.json", "parser_corrections.json"):
             source = target / "data" / name
             if source.is_file():
-                extras.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, extras / name)
+                os.makedirs(_to_extended_path(extras), exist_ok=True)
+                shutil.copy2(_to_extended_path(source), _to_extended_path(extras / name))
 
         metadata = {
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -490,11 +543,10 @@ def create_pre_update_backup(
             "verified": True,
             "verified_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
-        (temporary / "backup_manifest.json").write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(temporary, final)
+        manifest_file = _to_extended_path(temporary / "backup_manifest.json")
+        with open(manifest_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps(metadata, ensure_ascii=False, indent=2))
+        os.replace(_to_extended_path(temporary), _to_extended_path(final))
         completed_db = final / "database" / "requests.db"
         if is_rollback or (target_schema is not None and old_schema > target_schema):
             _save_dedicated_rollback_db_copy(
@@ -517,15 +569,16 @@ def create_pre_update_backup(
                 "kind": "pre_rollback" if is_rollback else "pre_update",
             }
             health_path = target / "data" / "backup_health.json"
-            health_path.parent.mkdir(parents=True, exist_ok=True)
-            temp_health = health_path.with_suffix(".tmp")
-            temp_health.write_text(json.dumps(health, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(temp_health, health_path)
+            os.makedirs(os.path.dirname(_to_extended_path(health_path)), exist_ok=True)
+            temp_health = _to_extended_path(health_path.with_suffix(".tmp"))
+            with open(temp_health, "w", encoding="utf-8") as f:
+                f.write(json.dumps(health, ensure_ascii=False, indent=2))
+            os.replace(temp_health, _to_extended_path(health_path))
         except OSError:
             logger.warning("Не удалось записать backup_health.json", exc_info=True)
         return final, completed_db if completed_db.is_file() else None, old_schema
     except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
+        _remove_path(temporary)
         raise
 
 
@@ -573,7 +626,7 @@ def _prepare_migrated_database(
     migration_dir = staging / "database_migration"
     migration_dir.mkdir(parents=True, exist_ok=True)
     candidate = migration_dir / "requests.db"
-    shutil.copy2(backup_db, candidate)
+    shutil.copy2(_to_extended_path(backup_db), _to_extended_path(candidate))
 
     # When rolling back to an older version whose database schema is lower than
     # the current database schema, downgrade the candidate DB first while the
@@ -643,10 +696,10 @@ def _activate_database(candidate: Path | None, target: Path, rollback: Path) -> 
     database.parent.mkdir(parents=True, exist_ok=True)
     _checkpoint_database(database)
     for suffix in ("-wal", "-shm"):
-        Path(str(database) + suffix).unlink(missing_ok=True)
-    if database.exists():
+        _remove_path(Path(str(database) + suffix))
+    if os.path.exists(_to_extended_path(database)):
         _move_if_exists(database, rollback / "database" / "requests.db")
-    shutil.move(str(candidate), str(database))
+    shutil.move(_to_extended_path(candidate), _to_extended_path(database))
     return True
 
 
@@ -656,12 +709,11 @@ def _rollback_database(target: Path, rollback: Path, database_was_swapped: bool)
     logger.warning("Выполняется откат рабочей БД")
     database = target / DATABASE_RELATIVE
     for suffix in ("", "-wal", "-shm"):
-        candidate = database if not suffix else Path(str(database) + suffix)
-        candidate.unlink(missing_ok=True)
+        _remove_path(Path(str(database) + suffix))
     saved = rollback / "database" / "requests.db"
-    if saved.is_file():
+    if os.path.isfile(_to_extended_path(saved)):
         database.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(saved), str(database))
+        shutil.move(_to_extended_path(saved), _to_extended_path(database))
 
 
 def _run_installed_checks(target: Path, target_schema: int) -> None:
@@ -734,10 +786,10 @@ def _install_update_impl(
 
     staging = target / ".update_staging"
     rollback = target / ".update_rollback"
-    shutil.rmtree(staging, ignore_errors=True)
-    shutil.rmtree(rollback, ignore_errors=True)
-    staging.mkdir(parents=True, exist_ok=True)
-    rollback.mkdir(parents=True, exist_ok=True)
+    _remove_path(staging)
+    _remove_path(rollback)
+    os.makedirs(_to_extended_path(staging), exist_ok=True)
+    os.makedirs(_to_extended_path(rollback), exist_ok=True)
 
     program_swapped = False
     database_swapped = False
@@ -802,7 +854,7 @@ def _install_update_impl(
             status.stage("final_check", "Проверяем установленную программу и БД...", 88)
         _run_installed_checks(target, target_schema)
 
-        shutil.rmtree(rollback, ignore_errors=True)
+        _remove_path(rollback)
         logger.info(
             "Версия %s успешно установлена. Backup сохранён: %s",
             version,
@@ -820,14 +872,14 @@ def _install_update_impl(
                 _rollback_program(target, rollback)
             except Exception:
                 logger.exception("Ошибка отката файлов программы")
-        shutil.rmtree(rollback, ignore_errors=True)
+        _remove_path(rollback)
         _restart_application(target)
         raise
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        _remove_path(staging)
 
     try:
-        package.unlink(missing_ok=True)
+        _remove_path(package)
     except OSError:
         logger.debug("Не удалось удалить локальный пакет обновления", exc_info=True)
 
