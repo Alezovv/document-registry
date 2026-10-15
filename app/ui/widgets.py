@@ -23,14 +23,14 @@ def create_stat_card(title, value, color):
     card = QFrame()
     card.setObjectName("statCard")
     card.setProperty("active", False)
-    card.setFixedHeight(86)
+    card.setFixedHeight(64)
     card.setCursor(Qt.CursorShape.PointingHandCursor)
     card.setStyleSheet(f"""
         QFrame#statCard {{
             background-color: #FFFFFF;
             border: 1px solid #E2E8F0;
             border-left: 3px solid {color};
-            border-radius: 13px;
+            border-radius: 11px;
         }}
         QFrame#statCard:hover {{
             border: 1px solid #CBD5E1;
@@ -45,8 +45,8 @@ def create_stat_card(title, value, color):
     """)
 
     layout = QVBoxLayout(card)
-    layout.setContentsMargins(16, 11, 15, 10)
-    layout.setSpacing(3)
+    layout.setContentsMargins(14, 8, 14, 7)
+    layout.setSpacing(2)
 
     top_layout = QHBoxLayout()
     top_layout.setSpacing(8)
@@ -70,7 +70,7 @@ def create_stat_card(title, value, color):
     value_label = QLabel(str(value))
     value_label.setStyleSheet("""
         color: #0F172A;
-        font-size: 25px;
+        font-size: 20px;
         font-weight: 750;
         letter-spacing: -0.4px;
         border: none;
@@ -78,3 +78,4 @@ def create_stat_card(title, value, color):
     layout.addWidget(value_label)
 
     return card, value_label
+

@@ -68,7 +68,7 @@ class HistoryPage(QWidget):
         title_layout.setSpacing(3)
         title = QLabel("История изменений")
         title.setStyleSheet("font-size:28px; font-weight:750; color:#0F172A; letter-spacing:-0.35px;")
-        description = QLabel("Журнал действий с запросами")
+        description = QLabel("Журнал действий с запросами (хранятся последние 2 000 записей)")
         description.setStyleSheet("color:#64748B; font-size:13px; font-weight:500;")
         title_layout.addWidget(title)
         title_layout.addWidget(description)
@@ -156,6 +156,7 @@ class HistoryPage(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(40)
         self.table.setStyleSheet(
             """
             QTableWidget {
@@ -164,12 +165,12 @@ class HistoryPage(QWidget):
                 font-size: 13px; outline: none; selection-background-color: #EAF2FF;
                 selection-color: #101828;
             }
-            QTableWidget::item { padding: 12px 10px; border-bottom: 1px solid #F2F4F7; }
+            QTableWidget::item { padding: 8px 10px; border-bottom: 1px solid #F2F4F7; }
             QTableWidget::item:selected { background-color: #EAF2FF; color: #101828; }
             QTableWidget::item:hover { background-color: #F4F8FE; }
             QHeaderView::section {
                 background-color: #F8FAFC; color: #475569; border: none;
-                border-bottom: 1px solid #E4E7EC; padding: 13px 10px;
+                border-bottom: 1px solid #E4E7EC; padding: 10px 10px;
                 font-size: 11px; font-weight: 700;
             }
             """
@@ -328,7 +329,11 @@ class HistoryPage(QWidget):
             )
 
     def load_history(self):
-        history = self.request_service.get_history()
+        try:
+            self.request_service.trim_history(2000)
+        except Exception:
+            pass
+        history = self.request_service.get_history(limit=2000, include_snapshot=False)
         search_cache: list[str] = []
         self.table.setUpdatesEnabled(False)
         try:

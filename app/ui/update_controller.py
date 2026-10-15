@@ -223,7 +223,8 @@ class UpdateController(QObject):
         message.setText(
             f"DocumentRegistry {self.current_version} → {info.version}"
         )
-        details = repair_cyrillic_mojibake(info.notes) or "Исправления и улучшения приложения."
+        details = info.notes or "Исправления и улучшения приложения."
+        details = repair_cyrillic_mojibake(details)
         size_mb = info.size_bytes / (1024 * 1024)
         message.setInformativeText(
             details

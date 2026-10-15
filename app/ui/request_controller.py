@@ -44,6 +44,7 @@ class RequestController(QObject):
         if request is None:
             return
         diagnostics = self.request_service.get_parser_metadata(request.id) if request.id else {}
+        dup_info = self.request_service.get_request_duplicate_info(request.id) if request.id else None
         presented_request = replace(request)
         dialog = RequestDialog(
             self.parent_widget,
@@ -51,6 +52,7 @@ class RequestController(QObject):
             documents_dir=self.documents_dir_getter(),
             suggestions=self.request_service.get_form_suggestions(),
             parser_diagnostics=diagnostics,
+            duplicate_info=dup_info,
         )
         result = dialog.exec()
         if result == RequestDialog.DELETE_RESULT:

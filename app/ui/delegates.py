@@ -26,23 +26,55 @@ class StatusDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         text = f'{style["icon"]}  {status}'
-        text_rect = painter.fontMetrics().boundingRect(text)
-        padding_x = 12
-        padding_y = 5
-        pill_width = text_rect.width() + padding_x * 2
-        pill_height = painter.fontMetrics().height() + padding_y * 2
-
+        fm = painter.fontMetrics()
+        status_w = fm.boundingRect(text).width() + 18
+        pill_height = fm.height() + 6
         rect = option.rect
-        x = rect.left() + (rect.width() - pill_width) // 2
-        y = rect.top() + (rect.height() - pill_height) // 2
-        bg_rect = QRect(x, y, pill_width, pill_height)
-        text_color = QColor(style["text"])
 
-        painter.setPen(QPen(text_color, 1))
-        painter.setBrush(QBrush(QColor(style["bg"])))
-        painter.drawRoundedRect(bg_rect, 12, 12)
-        painter.setPen(text_color)
-        painter.drawText(bg_rect, Qt.AlignmentFlag.AlignCenter, text)
+        dup_info = index.data(Qt.ItemDataRole.UserRole + 2)
+        is_dup = isinstance(dup_info, dict) and dup_info.get("is_duplicate")
+
+        if is_dup:
+            gap = 5
+            dup_candidates = ("📑 Дубликат", "📑 Копия", "📑")
+            chosen_dup = "📑"
+            dup_w = 22
+            for candidate in dup_candidates:
+                w = fm.boundingRect(candidate).width() + 14 if candidate != "📑" else 22
+                if status_w + gap + w <= rect.width() - 6:
+                    chosen_dup = candidate
+                    dup_w = w
+                    break
+
+            total_w = status_w + gap + dup_w
+            start_x = rect.left() + max(2, (rect.width() - total_w) // 2)
+            y = rect.top() + (rect.height() - pill_height) // 2
+            status_rect = QRect(start_x, y, status_w, pill_height)
+            dup_rect = QRect(start_x + status_w + gap, y, dup_w, pill_height)
+
+            text_color = QColor(style["text"])
+            painter.setPen(QPen(text_color, 1))
+            painter.setBrush(QBrush(QColor(style["bg"])))
+            painter.drawRoundedRect(status_rect, 10, 10)
+            painter.setPen(text_color)
+            painter.drawText(status_rect, Qt.AlignmentFlag.AlignCenter, text)
+
+            painter.setPen(QPen(QColor("#FDBA74"), 1))
+            painter.setBrush(QBrush(QColor("#FFF7ED")))
+            painter.drawRoundedRect(dup_rect, 9, 9)
+            painter.setPen(QColor("#C2410C"))
+            painter.drawText(dup_rect, Qt.AlignmentFlag.AlignCenter, chosen_dup)
+        else:
+            x = rect.left() + (rect.width() - status_w) // 2
+            y = rect.top() + (rect.height() - pill_height) // 2
+            bg_rect = QRect(x, y, status_w, pill_height)
+            text_color = QColor(style["text"])
+            painter.setPen(QPen(text_color, 1))
+            painter.setBrush(QBrush(QColor(style["bg"])))
+            painter.drawRoundedRect(bg_rect, 11, 11)
+            painter.setPen(text_color)
+            painter.drawText(bg_rect, Qt.AlignmentFlag.AlignCenter, text)
+
         painter.restore()
 
 

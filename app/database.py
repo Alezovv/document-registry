@@ -369,19 +369,38 @@ class Database:
             source_size_bytes=int(row["source_size_bytes"] or 0) if "source_size_bytes" in row.keys() else 0,
         )
 
-    def get_history(self):
+    def get_history(self, limit: int = 2000, offset: int = 0, *, include_snapshot: bool = True):
+        snapshot_col = "snapshot" if include_snapshot else "NULL AS snapshot"
+        safe_limit = max(1, min(int(limit), 10000))
+        safe_offset = max(0, int(offset))
         with self._get_connection() as conn:
             return conn.execute(
-                """
-                SELECT id, request_id, action, description, created_at, snapshot
-                FROM request_history ORDER BY id DESC
-                """
+                f"""
+                SELECT id, request_id, action, description, created_at, {snapshot_col}
+                FROM request_history ORDER BY id DESC LIMIT ? OFFSET ?
+                """,
+                (safe_limit, safe_offset),
             ).fetchall()
 
     def get_history_count(self) -> int:
         with self._get_connection() as conn:
             row = conn.execute("SELECT COUNT(*) AS count FROM request_history").fetchone()
             return int(row["count"] if row is not None else 0)
+
+    def trim_history(self, keep_count: int = 2000) -> int:
+        """Keep only the latest keep_count records in request_history, trimming older ones."""
+        safe_keep = max(1, int(keep_count))
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM request_history
+                WHERE id NOT IN (
+                    SELECT id FROM request_history ORDER BY id DESC LIMIT ?
+                )
+                """,
+                (safe_keep,),
+            )
+            return cursor.rowcount
 
     def get_history_record(self, history_id: int):
         with self._get_connection() as conn:
@@ -418,6 +437,17 @@ class Database:
                 """,
                 (request_id, action, description, snapshot),
             )
+            # Automatic rotation: when count exceeds 2100, trim back to 2000
+            row = conn.execute("SELECT COUNT(*) AS count FROM request_history").fetchone()
+            if row and int(row["count"] or 0) > 2100:
+                conn.execute(
+                    """
+                    DELETE FROM request_history
+                    WHERE id NOT IN (
+                        SELECT id FROM request_history ORDER BY id DESC LIMIT 2000
+                    )
+                    """
+                )
 
     def clear_history(self) -> None:
         with self._get_connection() as conn:
@@ -558,6 +588,15 @@ class Database:
         due_expr = self._sql_date_expr("r.due_date")
         recv_expr = self._sql_date_expr("r.received_date")
 
+        dup_subquery = (
+            "(SELECT r_dup.id FROM requests r_dup "
+            "JOIN (SELECT source_sha256, MIN(id) AS min_id FROM requests "
+            "WHERE TRIM(COALESCE(source_sha256, '')) != '' "
+            "GROUP BY source_sha256 HAVING COUNT(*) > 1) g_dup "
+            "ON r_dup.source_sha256 = g_dup.source_sha256 "
+            "WHERE r_dup.id != g_dup.min_id)"
+        )
+
         if status == "Активные":
             where.append("r.status NOT IN ('Исполнен', 'Отклонен')")
         elif status == "Просрочен":
@@ -565,6 +604,8 @@ class Database:
         elif status in ("Новый", "В работе"):
             where.append(f"r.status = ? AND NOT ({due_expr} != '' AND {due_expr} < date('now','localtime'))")
             params.append(status)
+        elif status in ("Дубликат", "Дубликаты"):
+            where.append(f"r.id IN {dup_subquery}")
         elif status and status != "Все статусы":
             where.append("r.status = ?")
             params.append(status)
@@ -606,15 +647,20 @@ class Database:
                 "Суть запроса": "r.request_subject",
                 "Статус": "r.status",
             }
+            is_dup_search = any(term in text.casefold() for term in ("дубликат", "дубликаты", "дубль", "дубли", "копи"))
+            dup_or = f" OR r.id IN {dup_subquery}" if is_dup_search else ""
             if search_field == "Все поля":
                 where.append(
                     "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD(r.received_date) LIKE ? OR CASEFOLD(r.due_date) LIKE ? "
                     "OR CASEFOLD(r.completed_date) LIKE ? OR CASEFOLD(r.from_department) LIKE ? "
                     "OR CASEFOLD(r.from_position) LIKE ? OR CASEFOLD(r.from_person) LIKE ? "
                     "OR CASEFOLD(r.to_person) LIKE ? OR CASEFOLD(r.request_subject) LIKE ? "
-                    "OR CASEFOLD(r.note) LIKE ? OR CASEFOLD(r.status) LIKE ? OR CASEFOLD(COALESCE(s.ocr_text,'')) LIKE ?)"
+                    f"OR CASEFOLD(r.note) LIKE ? OR CASEFOLD(r.status) LIKE ? OR CASEFOLD(COALESCE(s.ocr_text,'')) LIKE ?{dup_or})"
                 )
                 params.extend([like] * 12)
+            elif search_field == "Статус":
+                where.append(f"(CASEFOLD(r.status) LIKE ?{dup_or})")
+                params.append(like)
             elif search_field in field_map:
                 where.append(f"CASEFOLD({field_map[search_field]}) LIKE ?")
                 params.append(like)
@@ -1212,7 +1258,21 @@ class Database:
             return [request.id for request in self.get_requests() if request.id is not None]
         safe_limit = max(1, min(int(limit), 10000))
         query = self._fts_query(text)
+        is_dup_search = any(term in text.casefold() for term in ("дубликат", "дубликаты", "дубль", "дубли", "копи"))
+        dup_subquery = (
+            "SELECT r_dup.id FROM requests r_dup "
+            "JOIN (SELECT source_sha256, MIN(id) AS min_id FROM requests "
+            "WHERE TRIM(COALESCE(source_sha256, '')) != '' "
+            "GROUP BY source_sha256 HAVING COUNT(*) > 1) g_dup "
+            "ON r_dup.source_sha256 = g_dup.source_sha256 "
+            "WHERE r_dup.id != g_dup.min_id"
+        )
         with self._get_connection() as conn:
+            dup_ids: list[int] = []
+            if is_dup_search:
+                dup_rows = conn.execute(dup_subquery).fetchall()
+                dup_ids = [int(r["id"]) for r in dup_rows]
+
             if query:
                 try:
                     rows = conn.execute(
@@ -1225,7 +1285,14 @@ class Database:
                         """,
                         (query, safe_limit),
                     ).fetchall()
-                    return [int(row["request_id"]) for row in rows]
+                    res_ids = [int(row["request_id"]) for row in rows]
+                    if dup_ids:
+                        seen = set(res_ids)
+                        for did in dup_ids:
+                            if did not in seen:
+                                res_ids.append(did)
+                                seen.add(did)
+                    return res_ids
                 except sqlite3.OperationalError:
                     # Keep search usable on an unusual SQLite build even if FTS
                     # parsing rejects a query. The ordinary table also contains
@@ -1233,8 +1300,11 @@ class Database:
                     pass
 
             like_value = f"%{text}%"
+            dup_or = ""
+            if dup_ids:
+                dup_or = " OR r.id IN (" + ",".join(str(d) for d in dup_ids) + ")"
             rows = conn.execute(
-                """
+                f"""
                 SELECT r.id AS request_id
                 FROM requests r
                 LEFT JOIN request_search_content s ON s.request_id = r.id
@@ -1244,6 +1314,7 @@ class Database:
                     OR r.from_person LIKE ? OR r.to_person LIKE ?
                     OR r.request_subject LIKE ? OR r.note LIKE ? OR r.status LIKE ?
                     OR s.ocr_text LIKE ?
+                    {dup_or}
                 ORDER BY r.is_pinned DESC, r.id DESC
                 LIMIT ?
                 """,
@@ -1322,6 +1393,79 @@ class Database:
                 ))
         return result
 
+    def get_duplicate_map(self) -> dict[int, dict[str, Any]]:
+        """Return a mapping of request_id -> duplicate info for all duplicate requests."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.id AS req_id, orig.id AS orig_id, orig.received_date AS orig_date,
+                       orig.from_department AS orig_dept, orig.request_subject AS orig_subj,
+                       g.total_count
+                FROM requests r
+                JOIN (
+                    SELECT source_sha256, MIN(id) AS first_id, COUNT(*) AS total_count
+                    FROM requests
+                    WHERE TRIM(COALESCE(source_sha256, '')) != ''
+                    GROUP BY source_sha256
+                    HAVING COUNT(*) > 1
+                ) g ON r.source_sha256 = g.source_sha256
+                JOIN requests orig ON orig.id = g.first_id
+                WHERE r.id != g.first_id
+                """
+            ).fetchall()
+            return {
+                int(row["req_id"]): {
+                    "is_duplicate": True,
+                    "original_id": int(row["orig_id"]),
+                    "original_date": str(row["orig_date"] or ""),
+                    "original_department": str(row["orig_dept"] or ""),
+                    "original_subject": str(row["orig_subj"] or ""),
+                    "total_count": int(row["total_count"]),
+                }
+                for row in rows
+            }
+
+    def get_request_duplicate_info(self, request_id: int) -> dict[str, Any] | None:
+        """Return duplicate info for a single request, including original details if duplicate."""
+        if not request_id:
+            return None
+        with self._get_connection() as conn:
+            curr = conn.execute(
+                "SELECT source_sha256, source_size_bytes FROM requests WHERE id = ?",
+                (int(request_id),),
+            ).fetchone()
+            if not curr or not curr["source_sha256"]:
+                return None
+            sha256 = curr["source_sha256"]
+            rows = conn.execute(
+                """
+                SELECT id, received_date, from_department, from_position, from_person,
+                       to_person, request_subject, status, source_document
+                FROM requests
+                WHERE source_sha256 = ?
+                ORDER BY id ASC
+                """,
+                (sha256,),
+            ).fetchall()
+            if len(rows) <= 1:
+                return None
+            orig = rows[0]
+            orig_id = int(orig["id"])
+            is_dup = int(request_id) != orig_id
+            return {
+                "is_duplicate": is_dup,
+                "original_id": orig_id,
+                "original_date": str(orig["received_date"] or ""),
+                "original_department": str(orig["from_department"] or ""),
+                "original_position": str(orig["from_position"] or ""),
+                "original_person": str(orig["from_person"] or ""),
+                "original_to_person": str(orig["to_person"] or ""),
+                "original_subject": str(orig["request_subject"] or ""),
+                "original_status": str(orig["status"] or ""),
+                "total_count": len(rows),
+                "other_ids": [int(r["id"]) for r in rows if int(r["id"]) != int(request_id)],
+            }
+
     def set_parser_metadata(self, request_id: int, diagnostics: dict[str, Any], parser_version: str) -> None:
         payload = json.dumps(diagnostics or {}, ensure_ascii=False, separators=(",", ":"), default=str)
         with self._get_connection() as conn:
@@ -1381,6 +1525,15 @@ class Database:
             return []
         query = self._fts_query(text)
         safe_limit = max(1, min(int(limit), 2000))
+        is_dup_search = any(term in text.casefold() for term in ("дубликат", "дубликаты", "дубль", "дубли", "копи"))
+        dup_subquery = (
+            "SELECT r_dup.id FROM requests r_dup "
+            "JOIN (SELECT source_sha256, MIN(id) AS min_id FROM requests "
+            "WHERE TRIM(COALESCE(source_sha256, '')) != '' "
+            "GROUP BY source_sha256 HAVING COUNT(*) > 1) g_dup "
+            "ON r_dup.source_sha256 = g_dup.source_sha256 "
+            "WHERE r_dup.id != g_dup.min_id"
+        )
         if query:
             try:
                 with self._get_connection() as conn:
@@ -1396,10 +1549,19 @@ class Database:
                         """,
                         (query, safe_limit),
                     ).fetchall()
-                return [
-                    {"request_id": int(row["request_id"]), "snippet": str(row["snippet"] or ""), "rank": float(row["rank"] or 0.0)}
-                    for row in rows
-                ]
+                    hits = [
+                        {"request_id": int(row["request_id"]), "snippet": str(row["snippet"] or ""), "rank": float(row["rank"] or 0.0)}
+                        for row in rows
+                    ]
+                    if is_dup_search:
+                        dup_rows = conn.execute(dup_subquery).fetchall()
+                        seen = {h["request_id"] for h in hits}
+                        for r in dup_rows:
+                            rid = int(r["id"])
+                            if rid not in seen:
+                                hits.append({"request_id": rid, "snippet": "⚠️ Дубликат", "rank": -0.5})
+                                seen.add(rid)
+                    return hits
             except sqlite3.OperationalError:
                 pass
         ids = self.search_request_ids_full_text(text, limit=safe_limit)
@@ -1431,19 +1593,36 @@ class Database:
         if not value:
             return self.get_requests()
 
+        is_dup_search = any(term in value.casefold() for term in ("дубликат", "дубликаты", "дубль", "дубли", "копи"))
+        dup_subquery = (
+            "(SELECT r_dup.id FROM requests r_dup "
+            "JOIN (SELECT source_sha256, MIN(id) AS min_id FROM requests "
+            "WHERE TRIM(COALESCE(source_sha256, '')) != '' "
+            "GROUP BY source_sha256 HAVING COUNT(*) > 1) g_dup "
+            "ON r_dup.source_sha256 = g_dup.source_sha256 "
+            "WHERE r_dup.id != g_dup.min_id)"
+        )
         with self._get_connection() as conn:
             if field == "all":
-                query = """
+                dup_or = f" OR id IN {dup_subquery}" if is_dup_search else ""
+                query = f"""
                     SELECT * FROM requests
                     WHERE CAST(id AS TEXT) LIKE ? OR received_date LIKE ?
                         OR due_date LIKE ? OR completed_date LIKE ?
                         OR from_department LIKE ? OR from_position LIKE ?
                         OR from_person LIKE ? OR to_person LIKE ?
                         OR request_subject LIKE ? OR note LIKE ? OR status LIKE ?
+                        {dup_or}
                     ORDER BY is_pinned DESC, id DESC
                 """
                 search_value = f"%{value}%"
                 params = (search_value,) * 11
+            elif field == "status" and is_dup_search:
+                query = (
+                    f"SELECT * FROM requests WHERE (CAST(status AS TEXT) LIKE ? OR id IN {dup_subquery}) "
+                    "ORDER BY is_pinned DESC, id DESC"
+                )
+                params = (f"%{value}%",)
             else:
                 query = (
                     f"SELECT * FROM requests WHERE CAST({field} AS TEXT) LIKE ? "

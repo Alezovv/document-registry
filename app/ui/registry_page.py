@@ -74,7 +74,7 @@ class RegistryPage(QWidget):
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(16)
+        root.setSpacing(10)
         root.addLayout(self._build_header())
         root.addLayout(self._build_statistics())
         root.addWidget(self._build_search_card())
@@ -82,17 +82,17 @@ class RegistryPage(QWidget):
 
     def _build_header(self):
         header = QHBoxLayout()
-        header.setSpacing(14)
+        header.setSpacing(12)
 
         title_layout = QVBoxLayout()
-        title_layout.setSpacing(3)
+        title_layout.setSpacing(2)
         title = QLabel("Реестр запросов")
         title.setStyleSheet(
-            "font-size: 28px; font-weight: 750; color: #0F172A; letter-spacing: -0.35px;"
+            "font-size: 22px; font-weight: 750; color: #0F172A; letter-spacing: -0.3px;"
         )
         description = QLabel("Управление входящими запросами")
         description.setStyleSheet(
-            "color: #64748B; font-size: 13px; font-weight: 500;"
+            "color: #64748B; font-size: 12px; font-weight: 500;"
         )
         title_layout.addWidget(title)
         title_layout.addWidget(description)
@@ -109,13 +109,13 @@ class RegistryPage(QWidget):
         add_button = QPushButton("+  Новый запрос")
         add_button.setMinimumWidth(145)
         add_button.setMaximumWidth(180)
-        add_button.setMinimumHeight(42)
+        add_button.setMinimumHeight(38)
         add_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         add_button.setStyleSheet(
             f"""
             QPushButton {{
                 background-color: {PRIMARY_COLOR}; color: white; border: 1px solid {PRIMARY_COLOR};
-                border-radius: 9px; padding: 10px 18px; font-size: 13px; font-weight: 700;
+                border-radius: 9px; padding: 8px 16px; font-size: 13px; font-weight: 700;
             }}
             QPushButton:hover {{
                 background-color: {PRIMARY_HOVER}; border-color: {PRIMARY_HOVER};
@@ -130,10 +130,10 @@ class RegistryPage(QWidget):
 
         export_button = QPushButton("Экспорт Excel")
         export_button.setMinimumWidth(130)
-        export_button.setMinimumHeight(42)
+        export_button.setMinimumHeight(38)
         export_button.setStyleSheet(
             "QPushButton { background: #FFFFFF; color: #334155; border: 1px solid #CBD5E1; "
-            "border-radius: 9px; font-size: 13px; font-weight: 600; padding: 10px 16px; } "
+            "border-radius: 9px; font-size: 13px; font-weight: 600; padding: 8px 16px; } "
             "QPushButton:hover { background: #F8FAFC; border-color: #94A3B8; color:#1D4ED8; }"
         )
         export_button.clicked.connect(
@@ -145,7 +145,7 @@ class RegistryPage(QWidget):
 
     def _build_statistics(self):
         stats = QHBoxLayout()
-        stats.setSpacing(12)
+        stats.setSpacing(10)
 
         self.total_card, self.total_value = create_stat_card("Всего запросов", 0, TEXT_COLOR)
         self.new_card, self.new_value = create_stat_card("Новые", 0, INFO_COLOR)
@@ -169,8 +169,8 @@ class RegistryPage(QWidget):
     def _build_search_card(self):
         card = create_card()
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 15, 18, 15)
-        layout.setSpacing(11)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(8)
 
         header = QHBoxLayout()
         title = QLabel("Поиск и фильтрация")
@@ -190,23 +190,23 @@ class RegistryPage(QWidget):
         self.search_field.addItem("Все поля")
         self.search_field.addItems(SEARCH_FIELDS)
         self.search_field.setFixedWidth(160)
-        self.search_field.setFixedHeight(38)
+        self.search_field.setFixedHeight(34)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Введите значение...")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setFixedHeight(38)
+        self.search_input.setFixedHeight(34)
         search_row.addWidget(self.search_field)
         search_row.addWidget(self.search_input, 1)
         layout.addLayout(search_row)
 
         filter_row = QHBoxLayout()
-        filter_row.setSpacing(12)
+        filter_row.setSpacing(10)
         status_label = QLabel("Статус:")
         status_label.setStyleSheet("color: #475467; font-size: 12px; font-weight: 500;")
         self.status_filter = NoWheelComboBox()
         self.status_filter.addItem("Все статусы")
-        self.status_filter.addItems(["Активные"] + STATUSES + ["Просрочен"])
-        self.status_filter.setFixedHeight(36)
+        self.status_filter.addItems(["Активные"] + STATUSES + ["Просрочен", "Дубликат"])
+        self.status_filter.setFixedHeight(32)
         self.status_filter.setMinimumWidth(140)
         filter_row.addWidget(status_label)
         filter_row.addWidget(self.status_filter)
@@ -222,7 +222,7 @@ class RegistryPage(QWidget):
         self.date_from_filter = SmartDateEdit(
             optional=True, empty_text="С даты", minimum_date=QDate(*REGISTRY_MIN_DATE)
         )
-        self.date_from_filter.setFixedHeight(36)
+        self.date_from_filter.setFixedHeight(32)
         self.date_from_filter.setMinimumWidth(132)
         filter_row.addWidget(self.date_from_filter)
         arrow = QLabel("→")
@@ -231,7 +231,7 @@ class RegistryPage(QWidget):
         self.date_to_filter = SmartDateEdit(
             optional=True, empty_text="По дату", minimum_date=QDate(*REGISTRY_MIN_DATE)
         )
-        self.date_to_filter.setFixedHeight(36)
+        self.date_to_filter.setFixedHeight(32)
         self.date_to_filter.setMinimumWidth(132)
         filter_row.addWidget(self.date_to_filter)
 
@@ -241,14 +241,14 @@ class RegistryPage(QWidget):
         self.deadline_filter.addItems(
             ["Любой", "Сегодня", "Ближайшие 7 дней", "Без срока", "Просрочен"]
         )
-        self.deadline_filter.setFixedHeight(36)
+        self.deadline_filter.setFixedHeight(32)
         self.deadline_filter.setMinimumWidth(135)
         filter_row.addWidget(deadline_label)
         filter_row.addWidget(self.deadline_filter)
         filter_row.addStretch()
 
         self.clear_search_button = QPushButton("Сбросить")
-        self.clear_search_button.setFixedHeight(36)
+        self.clear_search_button.setFixedHeight(32)
         self.clear_search_button.setStyleSheet(
             """
             QPushButton {
@@ -268,7 +268,7 @@ class RegistryPage(QWidget):
         self.recipient_filter.hide()
 
         quick_row = QHBoxLayout()
-        quick_row.setSpacing(7)
+        quick_row.setSpacing(6)
         quick_label = QLabel("Быстрый период:")
         quick_label.setStyleSheet("color:#667085; font-size:11px; font-weight:600;")
         quick_row.addWidget(quick_label)
@@ -280,10 +280,10 @@ class RegistryPage(QWidget):
             ("Весь период", "all"),
         ):
             button = QPushButton(text)
-            button.setFixedHeight(29)
+            button.setFixedHeight(26)
             button.setStyleSheet(
                 "QPushButton { background:#FFFFFF; color:#475569; border:1px solid #E2E8F0; "
-                "border-radius:7px; padding:3px 10px; font-size:11px; font-weight:600; } "
+                "border-radius:6px; padding:2px 8px; font-size:11px; font-weight:600; } "
                 "QPushButton:hover { background:#EFF6FF; color:#1D4ED8; border-color:#BFDBFE; }"
             )
             button.clicked.connect(lambda _checked=False, preset=mode: self._set_quick_period(preset))
@@ -331,7 +331,7 @@ class RegistryPage(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(46)
+        self.table.verticalHeader().setDefaultSectionSize(48)
         self.table.setStyleSheet(
             """
             QTableWidget {
@@ -340,13 +340,13 @@ class RegistryPage(QWidget):
                 font-size: 13px; outline: none; selection-background-color: #EAF2FF;
                 selection-color: #101828;
             }
-            QTableWidget::item { padding: 10px 11px; border-bottom: 1px solid #EEF2F6; }
+            QTableWidget::item { padding: 6px 10px; border-bottom: 1px solid #EEF2F6; }
             QTableWidget::item:selected { background-color: #EAF2FF; color: #101828; }
             QTableWidget::item:hover { background-color: #F4F8FE; }
             QHeaderView { background-color: #F8FAFC; }
             QHeaderView::section {
                 background-color: #F8FAFC; color: #475569; border: none;
-                border-bottom: 1px solid #E4E7EC; padding: 12px 11px;
+                border-bottom: 1px solid #E4E7EC; padding: 8px 10px;
                 font-size: 11px; font-weight: 700;
             }
             QScrollBar:vertical { background: transparent; width: 10px; margin: 6px 2px 6px 0; }
@@ -632,6 +632,11 @@ class RegistryPage(QWidget):
         if hasattr(self, "empty_label"):
             self.empty_label.setVisible(not has_rows)
         self.table.setUpdatesEnabled(False)
+        duplicate_map: dict[int, dict] = {}
+        try:
+            duplicate_map = self.request_service.get_duplicate_map()
+        except Exception:
+            pass
         try:
             self.table.setRowCount(len(requests))
             for row_index, request in enumerate(requests):
@@ -669,11 +674,22 @@ class RegistryPage(QWidget):
                     request.note,
                     request.display_status(),
                 )
+                dup = duplicate_map.get(request.id)
                 for offset, raw_value in enumerate(values):
                     value = str(raw_value or "")
                     column = offset + 2
                     item = QTableWidgetItem(value)
                     item.setToolTip(value)
+                    if column == 8 and dup and dup.get("is_duplicate"):
+                        item.setData(Qt.ItemDataRole.UserRole + 2, dup)
+                        orig_id = dup.get("original_id", "")
+                        orig_date = dup.get("original_date", "")
+                        orig_dept = dup.get("original_department", "")
+                        orig_subj = dup.get("original_subject", "")
+                        date_part = f" от {orig_date}" if orig_date else ""
+                        dept_part = f" [{orig_dept}]" if orig_dept else ""
+                        subj_part = f"\nСуть: «{orig_subj[:60]}…»" if len(orig_subj) > 60 else (f"\nСуть: «{orig_subj}»" if orig_subj else "")
+                        item.setToolTip(f"Статус: {value}\n\n⚠️ Внимание: дубликат документа!\nОригинал: Запрос #{orig_id}{date_part}{dept_part}{subj_part}")
                     if column in (2, 3, 8):
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     self.table.setItem(row_index, column, item)
@@ -694,7 +710,7 @@ class RegistryPage(QWidget):
                         item = self.table.item(row_index, column)
                         if item is not None:
                             item.setBackground(row_background)
-                self.table.setRowHeight(row_index, 78 if snippet else 64)
+                self.table.setRowHeight(row_index, 66 if snippet else 48)
         finally:
             self.table.setUpdatesEnabled(True)
 
@@ -815,10 +831,22 @@ class RegistryPage(QWidget):
             "Статус": "status",
         }
 
+        is_dup_filter = selected_status in ("Дубликат", "Дубликаты")
+        is_dup_search = any(term in search_text for term in ("дубликат", "дубликаты", "дубль", "дубли", "копи"))
+        dup_map = None
+        if is_dup_filter or (search_text and is_dup_search and selected_field in ("Все поля", "Статус")):
+            try:
+                dup_map = self.request_service.get_duplicate_map()
+            except Exception:
+                dup_map = {}
+
         filtered = []
         for request in self.requests:
             if selected_status == "Активные":
                 if request.status in ("Исполнен", "Отклонен"):
+                    continue
+            elif selected_status in ("Дубликат", "Дубликаты"):
+                if not dup_map or request.id not in dup_map:
                     continue
             elif selected_status != "Все статусы" and request.display_status() != selected_status:
                 continue
@@ -856,20 +884,26 @@ class RegistryPage(QWidget):
             if search_text:
                 if selected_field == "Все поля":
                     if full_text_ids is not None:
-                        if request.id not in full_text_ids:
+                        if request.id not in full_text_ids and not (is_dup_search and dup_map and request.id in dup_map):
                             continue
                     else:
-                        # Keep no duplicated "all fields" string in memory.  This
-                        # fallback is only used when the SQLite FTS index is temporarily unavailable.
-                        if search_text not in " ".join(
+                        match_text = search_text in " ".join(
                             str(cached.get(key, ""))
                             for key in (
                                 "received_date", "due_date", "completed_date",
                                 "from_department", "from_position", "from_person",
                                 "to_person", "request_subject", "note", "status",
                             )
-                        ):
+                        )
+                        match_dup = is_dup_search and dup_map and request.id in dup_map
+                        if not match_text and not match_dup:
                             continue
+                elif selected_field == "Статус":
+                    status_text = str(cached.get("status", ""))
+                    match_status = search_text in status_text
+                    match_dup = is_dup_search and dup_map and request.id in dup_map
+                    if not match_status and not match_dup:
+                        continue
                 else:
                     attr = field_mapping.get(selected_field)
                     if search_text not in str(cached.get(attr or "", "")):

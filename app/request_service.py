@@ -82,11 +82,14 @@ class RequestService:
     def get_request(self, request_id: int) -> Request | None:
         return self.database.get_request(request_id)
 
-    def get_history(self):
-        return self.database.get_history()
+    def get_history(self, limit: int = 2000, offset: int = 0, *, include_snapshot: bool = True):
+        return self.database.get_history(limit=limit, offset=offset, include_snapshot=include_snapshot)
 
     def get_history_count(self) -> int:
         return self.database.get_history_count()
+
+    def trim_history(self, keep_count: int = 2000) -> int:
+        return self.database.trim_history(keep_count=keep_count)
 
     def get_history_record(self, history_id: int):
         return self.database.get_history_record(history_id)
@@ -284,6 +287,12 @@ class RequestService:
 
     def get_duplicate_document_groups(self):
         return self.fingerprints.duplicate_groups(backfill=True)
+
+    def get_duplicate_map(self) -> dict[int, dict]:
+        return self.database.get_duplicate_map()
+
+    def get_request_duplicate_info(self, request_id: int) -> dict | None:
+        return self.database.get_request_duplicate_info(request_id)
 
     def get_search_index_stats(self) -> dict[str, int]:
         return self.database.get_search_index_stats()

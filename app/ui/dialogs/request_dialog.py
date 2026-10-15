@@ -44,6 +44,7 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         parsed=False,
         suggestions=None,
         parser_diagnostics=None,
+        duplicate_info=None,
     ):
         super().__init__(parent)
         self.setWindowFlags(
@@ -61,6 +62,7 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         self.parsed = parsed
         self.suggestions = suggestions or {}
         self.parser_diagnostics = parser_diagnostics or {}
+        self.duplicate_info = duplicate_info or {}
         self.parser_cache = (
             ParserCache(self.documents_dir.parent / "parser_cache")
             if self.documents_dir is not None
@@ -268,6 +270,8 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         self.toggle_pdf_viewer(True, pdf_path)
 
     def _apply_parser_review_styles(self) -> None:
+        if self.request is not None:
+            return
         for field in REVIEWABLE_FIELDS:
             widget = self._review_widget(field)
             if widget is None:
@@ -293,6 +297,26 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
             self.pdf_highlight_preview.close()
         except Exception:
             pass
+
+    def _show_original_info(self):
+        if not self.duplicate_info:
+            return
+        orig_id = self.duplicate_info.get("original_id")
+        parts = [
+            f"Номер запроса: #{orig_id}",
+            f"Дата поступления: {self.duplicate_info.get('original_date', '—')}",
+            f"Статус: {self.duplicate_info.get('original_status', '—')}",
+            f"Отдел: {self.duplicate_info.get('original_department', '—')}",
+            f"Должность: {self.duplicate_info.get('original_position', '—')}",
+            f"ФИО: {self.duplicate_info.get('original_person', '—')}",
+            f"На кого: {self.duplicate_info.get('original_to_person', '—')}",
+            f"Суть запроса: {self.duplicate_info.get('original_subject', '—')}",
+        ]
+        QMessageBox.information(
+            self,
+            f"Оригинал: Запрос #{orig_id}",
+            "\n".join(parts),
+        )
 
     def _install_suggestions(self, field: QLineEdit, key: str) -> None:
         values = [str(value).strip() for value in self.suggestions.get(key, []) if str(value).strip()]
@@ -420,6 +444,24 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
             id_badge.setToolTip("Уникальный номер записи в базе")
             title_row.addWidget(id_badge)
 
+        if self.duplicate_info and self.duplicate_info.get("is_duplicate"):
+            dup_badge = QLabel("⚠️ Дубликат", header_widget)
+            dup_badge.setFixedHeight(24)
+            dup_badge.setStyleSheet("""
+                QLabel {
+                    background-color: #FEF3F2;
+                    color: #B42318;
+                    border: 1px solid #FECDCA;
+                    font-size: 11px;
+                    font-weight: 700;
+                    padding: 0px 8px;
+                    border-radius: 6px;
+                }
+            """)
+            orig_id = self.duplicate_info.get("original_id")
+            dup_badge.setToolTip(f"Прикреплённый документ совпадает с запросом #{orig_id}")
+            title_row.addWidget(dup_badge)
+
         header_layout.addLayout(title_row)
 
         subtitle = QLabel(
@@ -428,7 +470,73 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         )
         subtitle.setObjectName("dialogSubtitle")
         header_layout.addWidget(subtitle)
-        self._build_parser_review_bar(header_layout, header_widget)
+
+        if self.duplicate_info and self.duplicate_info.get("is_duplicate"):
+            orig_id = self.duplicate_info.get("original_id")
+            banner = QFrame(header_widget)
+            banner.setObjectName("duplicateBanner")
+            banner.setStyleSheet("""
+                QFrame#duplicateBanner {
+                    background-color: #FFF7ED;
+                    border: 1px solid #FED7AA;
+                    border-radius: 9px;
+                }
+            """)
+            banner_layout = QHBoxLayout(banner)
+            banner_layout.setContentsMargins(12, 8, 12, 8)
+            banner_layout.setSpacing(10)
+
+            icon_lbl = QLabel("📑", banner)
+            icon_lbl.setStyleSheet("font-size: 16px; border: none; background: transparent;")
+            banner_layout.addWidget(icon_lbl)
+
+            info_layout = QVBoxLayout()
+            info_layout.setSpacing(2)
+            top_lbl = QLabel(f"Прикреплённый документ — дубликат (Оригинал: Запрос #{orig_id})", banner)
+            top_lbl.setStyleSheet("color: #9A3412; font-weight: 700; font-size: 12px; border: none; background: transparent;")
+            info_layout.addWidget(top_lbl)
+
+            desc_parts = []
+            if self.duplicate_info.get("original_date"):
+                desc_parts.append(f"Дата: {self.duplicate_info['original_date']}")
+            if self.duplicate_info.get("original_department"):
+                desc_parts.append(f"Отдел: {self.duplicate_info['original_department']}")
+            if self.duplicate_info.get("original_person"):
+                desc_parts.append(f"ФИО: {self.duplicate_info['original_person']}")
+            if self.duplicate_info.get("original_subject"):
+                desc_parts.append(f"Суть: «{self.duplicate_info['original_subject']}»")
+            sub_lbl = QLabel(" · ".join(desc_parts) if desc_parts else "Файл идентичен первичному документу", banner)
+            sub_lbl.setStyleSheet("color: #C2410C; font-size: 11px; border: none; background: transparent;")
+            sub_lbl.setWordWrap(True)
+            info_layout.addWidget(sub_lbl)
+            banner_layout.addLayout(info_layout, 1)
+
+            btn_view = QPushButton(f"Посмотреть оригинал #{orig_id}", banner)
+            btn_view.setFixedHeight(28)
+            btn_view.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_view.setStyleSheet("""
+                QPushButton {
+                    background-color: #FFFFFF;
+                    color: #C2410C;
+                    border: 1px solid #FDBA74;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 0 10px;
+                }
+                QPushButton:hover {
+                    background-color: #FFEDD5;
+                    border-color: #FB923C;
+                }
+            """)
+            btn_view.clicked.connect(self._show_original_info)
+            banner_layout.addWidget(btn_view)
+
+            header_layout.addWidget(banner)
+
+        # "Распознавание" скрыто в режиме редактирования запроса по требованию
+        if not self.request:
+            self._build_parser_review_bar(header_layout, header_widget)
 
         main_layout.addWidget(header_widget)
 
