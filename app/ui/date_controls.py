@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date as py_date
 
 from PySide6.QtCore import QDate, QEvent, QPoint, Qt, Signal
-from PySide6.QtGui import QAction, QKeyEvent
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCalendarWidget,
     QComboBox,
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-from app.date_input import format_date, format_date_while_typing, parse_friendly_date
+from app.date_input import format_date_while_typing, parse_friendly_date
 
 
 EMPTY_DATE = QDate(1900, 1, 1)

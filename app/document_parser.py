@@ -18,19 +18,6 @@ from app.parser_core import (
 from app.document_parser_parts.constants import (
     FIELD_CONFIDENCE_FLOOR,
     FIELD_NAMES,
-    FIELD_LABEL_ALIASES,
-    LATIN_LOOKALIKE_MAP,
-    ORGANISATION_TERMS,
-    POSITION_TERMS,
-    RUSSIAN_MONTHS,
-    SUBJECT_ACTION_VERBS,
-    SUBJECT_CONTEXT_ANCHORS,
-    SUBJECT_MAX_CHARS,
-    SUBJECT_MAX_LINES,
-    SUBJECT_OBJECT_TERMS,
-    SUBJECT_REQUEST_ANCHORS,
-    SUBJECT_STOP_MARKERS,
-    TARGET_STOP_WORDS,
 )
 from app.document_parser_parts.fields import FieldExtractionMixin
 from app.document_parser_parts.filename import FilenameParsingMixin

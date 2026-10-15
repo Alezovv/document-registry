@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import gc
 import re
-import sys
 import threading
 import unicodedata
 from pathlib import Path

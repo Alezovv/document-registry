@@ -1,4 +1,3 @@
-from pathlib import Path
 import logging
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QStackedWidget, QWidget

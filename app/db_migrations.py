@@ -8,8 +8,6 @@ from pathlib import Path
 import sqlite3
 from typing import Callable, Iterable
 
-from app.text_encoding import loads_json_with_fallback, repair_cyrillic_mojibake
-
 CURRENT_SCHEMA_VERSION = 7
 
 PRESERVED_REQUEST_COLUMNS = (

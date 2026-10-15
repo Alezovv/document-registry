@@ -5,9 +5,7 @@ from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QCompleter,
-    QDateEdit,
     QDialog,
     QFrame,
     QGridLayout,
