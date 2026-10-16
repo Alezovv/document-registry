@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -209,40 +210,162 @@ def wait_for_process_exit(pid: int, timeout_seconds: int = 180) -> None:
     raise InstallError("Программа не завершилась вовремя. Обновление отменено.")
 
 
-def _move_if_exists(source: Path, destination: Path) -> None:
+def _make_writable(path: str | Path) -> None:
+    try:
+        path_str = str(path)
+        if sys.platform == "win32":
+            ctypes.windll.kernel32.SetFileAttributesW(_to_extended_path(path_str), 0x80)  # FILE_ATTRIBUTE_NORMAL
+        os.chmod(_to_extended_path(path_str), stat.S_IWRITE)
+    except Exception:
+        pass
+
+
+def _terminate_lingering_instances(target: Path) -> None:
+    """Terminate any lingering DocumentRegistry.exe instances that might lock DLLs or databases."""
+    if os.name != "nt":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", MAIN_EXE],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+        time.sleep(0.5)
+    except Exception:
+        pass
+
+
+def _check_disk_space(target: Path, required_mb: int = 500) -> None:
+    try:
+        usage = shutil.disk_usage(str(target))
+        free_mb = usage.free / (1024 * 1024)
+        if free_mb < required_mb:
+            raise InstallError(
+                f"Недостаточно свободного места на диске ({free_mb:.0f} МБ свободно, требуется минимум {required_mb} МБ)."
+            )
+    except OSError:
+        pass
+
+
+def _remove_path(path: Path, retries: int = 4, delay: float = 0.3) -> None:
+    p_ext = _to_extended_path(path)
+    if not os.path.exists(p_ext):
+        return
+
+    def _on_rm_error(func, p, excinfo):
+        _make_writable(p)
+        try:
+            func(p)
+        except Exception:
+            pass
+
+    for attempt in range(max(1, retries)):
+        if os.path.isdir(p_ext):
+            try:
+                shutil.rmtree(p_ext, onerror=_on_rm_error)
+            except Exception:
+                shutil.rmtree(p_ext, ignore_errors=True)
+        else:
+            _make_writable(p_ext)
+            try:
+                os.unlink(p_ext)
+            except OSError:
+                pass
+        if not os.path.exists(p_ext):
+            return
+        time.sleep(delay)
+
+
+def _move_if_exists(source: Path, destination: Path, retries: int = 6, delay: float = 0.5) -> None:
     src_ext = _to_extended_path(source)
     dst_ext = _to_extended_path(destination)
     if not os.path.exists(src_ext):
         return
     os.makedirs(os.path.dirname(dst_ext), exist_ok=True)
-    shutil.move(src_ext, dst_ext)
 
-
-def _remove_path(path: Path) -> None:
-    p_ext = _to_extended_path(path)
-    if os.path.isdir(p_ext):
-        shutil.rmtree(p_ext, ignore_errors=True)
-    elif os.path.exists(p_ext):
+    last_error: Exception | None = None
+    for attempt in range(max(1, retries)):
         try:
-            os.unlink(p_ext)
-        except OSError:
-            pass
+            if os.path.exists(dst_ext):
+                _remove_path(destination)
+            shutil.move(src_ext, dst_ext)
+            return
+        except (PermissionError, OSError, shutil.Error) as err:
+            last_error = err
+            logger.warning(
+                "Попытка %s/%s перемещения %s -> %s не удалась (%s). Повтор...",
+                attempt + 1,
+                retries,
+                source.name,
+                destination.name,
+                err,
+            )
+            if os.path.isdir(src_ext):
+                for root, _, files in os.walk(src_ext):
+                    for f in files:
+                        _make_writable(os.path.join(root, f))
+            else:
+                _make_writable(src_ext)
+            time.sleep(delay)
+
+    if last_error is not None:
+        raise last_error
 
 
 def _rollback_program(target: Path, rollback: Path) -> None:
     logger.warning("Выполняется откат файлов программы")
+    saved_prog = rollback / "program"
+    saved_prog_ext = _to_extended_path(saved_prog)
+    if not os.path.exists(saved_prog_ext):
+        return
+
+    _terminate_lingering_instances(target)
+
     for name in (MAIN_EXE, INTERNAL_DIR, VERSION_FILE):
-        current = target / name
-        _remove_path(current)
-        saved = rollback / "program" / name
-        if saved.exists():
+        saved = saved_prog / name
+        if os.path.exists(_to_extended_path(saved)):
+            current = target / name
+            _remove_path(current)
             _move_if_exists(saved, current)
 
-    current_updater = target / UPDATER_DIR / UPDATER_FILE
-    _remove_path(current_updater)
-    saved_updater = rollback / "program" / UPDATER_DIR / UPDATER_FILE
-    if saved_updater.exists():
+    saved_updater = saved_prog / UPDATER_DIR / UPDATER_FILE
+    if os.path.exists(_to_extended_path(saved_updater)):
+        current_updater = target / UPDATER_DIR / UPDATER_FILE
+        _remove_path(current_updater)
         _move_if_exists(saved_updater, current_updater)
+
+
+def _recover_interrupted_rollback(target: Path) -> bool:
+    """If a previous install was interrupted mid-swap (e.g. power cut), restore program files."""
+    rollback = target / ".update_rollback"
+    saved_prog = rollback / "program"
+    saved_prog_ext = _to_extended_path(saved_prog)
+    if not os.path.exists(saved_prog_ext):
+        return False
+
+    saved_exe = saved_prog / MAIN_EXE
+    target_exe = target / MAIN_EXE
+    recovered = False
+    if os.path.isfile(_to_extended_path(saved_exe)) and not os.path.isfile(_to_extended_path(target_exe)):
+        logger.warning("Обнаружена прерванная установка: восстанавливаем %s из %s", MAIN_EXE, saved_exe)
+        try:
+            _move_if_exists(saved_exe, target_exe)
+            recovered = True
+        except Exception as e:
+            logger.error("Не удалось восстановить %s: %s", MAIN_EXE, e)
+
+    saved_internal = saved_prog / INTERNAL_DIR
+    target_internal = target / INTERNAL_DIR
+    if os.path.isdir(_to_extended_path(saved_internal)) and not os.path.isdir(_to_extended_path(target_internal)):
+        try:
+            _move_if_exists(saved_internal, target_internal)
+            recovered = True
+        except Exception:
+            pass
+
+    return recovered
 
 
 def _checkpoint_database(database: Path) -> None:
@@ -677,16 +800,24 @@ def _prepare_migrated_database(
 
 
 def _activate_program(payload: Path, target: Path, rollback: Path) -> None:
-    for name in (MAIN_EXE, INTERNAL_DIR, VERSION_FILE):
-        _move_if_exists(target / name, rollback / "program" / name)
-    current_updater = target / UPDATER_DIR / UPDATER_FILE
-    incoming_updater = payload / UPDATER_DIR / UPDATER_FILE
-    _move_if_exists(current_updater, rollback / "program" / UPDATER_DIR / UPDATER_FILE)
+    _terminate_lingering_instances(target)
+    try:
+        for name in (INTERNAL_DIR, VERSION_FILE):
+            _move_if_exists(target / name, rollback / "program" / name)
+        current_updater = target / UPDATER_DIR / UPDATER_FILE
+        incoming_updater = payload / UPDATER_DIR / UPDATER_FILE
+        _move_if_exists(current_updater, rollback / "program" / UPDATER_DIR / UPDATER_FILE)
 
-    _move_if_exists(payload / MAIN_EXE, target / MAIN_EXE)
-    _move_if_exists(payload / INTERNAL_DIR, target / INTERNAL_DIR)
-    _move_if_exists(payload / VERSION_FILE, target / VERSION_FILE)
-    _move_if_exists(incoming_updater, current_updater)
+        _move_if_exists(payload / INTERNAL_DIR, target / INTERNAL_DIR)
+        _move_if_exists(payload / VERSION_FILE, target / VERSION_FILE)
+        _move_if_exists(incoming_updater, current_updater)
+
+        _move_if_exists(target / MAIN_EXE, rollback / "program" / MAIN_EXE)
+        _move_if_exists(payload / MAIN_EXE, target / MAIN_EXE)
+    except Exception as error:
+        logger.error("Ошибка при замене файлов программы: %s. Немедленный откат...", error)
+        _rollback_program(target, rollback)
+        raise
 
 
 def _activate_database(candidate: Path | None, target: Path, rollback: Path) -> bool:
@@ -781,6 +912,9 @@ def _install_update_impl(
         status.stage("wait_app", "Ожидаем закрытия DocumentRegistry...", 5)
 
     wait_for_process_exit(parent_pid)
+    _terminate_lingering_instances(target)
+    _check_disk_space(target)
+    _recover_interrupted_rollback(target)
     if status:
         status.stage("verify_package", "Проверяем пакет обновления...", 12)
 
@@ -867,11 +1001,10 @@ def _install_update_impl(
             _rollback_database(target, rollback, database_swapped)
         except Exception:
             logger.exception("Ошибка отката БД")
-        if program_swapped:
-            try:
-                _rollback_program(target, rollback)
-            except Exception:
-                logger.exception("Ошибка отката файлов программы")
+        try:
+            _rollback_program(target, rollback)
+        except Exception:
+            logger.exception("Ошибка отката файлов программы")
         _remove_path(rollback)
         _restart_application(target)
         raise
@@ -958,6 +1091,25 @@ def show_error(message: str) -> None:
         pass
 
 
+def show_info(message: str) -> None:
+    logger.info(message)
+    if os.name == "nt":
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                str(message),
+                "DocumentRegistry",
+                0x40,
+            )
+            return
+        except Exception:
+            pass
+    try:
+        print(message)
+    except Exception:
+        pass
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-check", action="store_true")
@@ -998,6 +1150,14 @@ def main(argv: list[str] | None = None) -> int:
 
     required = (args.install, args.target, args.expected_sha256, args.version)
     if not all(required):
+        # Self-healing: if someone launched updater directly or by double-clicking it
+        target_dir = Path(sys.executable).resolve().parent
+        if target_dir.name.lower() == "updater":
+            target_dir = target_dir.parent
+        if _recover_interrupted_rollback(target_dir):
+            show_info("Восстановлена предыдущая работоспособная версия программы. Запускаем...")
+            _restart_application(target_dir)
+            return 0
         show_error("Не заданы обязательные параметры установки обновления.")
         return 2
 
