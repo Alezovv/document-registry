@@ -32,6 +32,9 @@ class RequestFormMixin:
         self.from_position.setText(self.request.from_position)
         self.from_person.setText(self.request.from_person)
         self.to_person.setText(self.request.to_person)
+        for w in (self.from_department, self.from_position, self.from_person, self.to_person):
+            if hasattr(w, "setCursorPosition"):
+                w.setCursorPosition(0)
         self.request_subject.setPlainText(self.request.request_subject)
 
         index = self.status.findText(self.request.status)

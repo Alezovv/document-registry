@@ -66,8 +66,10 @@ class NormalizationMixin:
                 # Fuzzy matching is intentionally restricted to short label-like
                 # lines so normal prose never becomes a field label by accident.
                 if not remainder and len(key.split()) <= 4:
+                    if key.startswith(("адрес", "по адрес", "на адрес")) and alias_key == "адресат":
+                        continue
                     score = SequenceMatcher(None, key, alias_key).ratio()
-                    if score >= 0.82 and (best is None or score > best[0]):
+                    if score >= 0.86 and (best is None or score > best[0]):
                         best = (score, field)
         if best:
             return best[1], remainder
@@ -236,7 +238,10 @@ class NormalizationMixin:
         if field == "received_date":
             return cls._normalize_date_value(value)
         if field in {"from_person", "to_person"}:
-            return cls._normalize_fio(value, target=(field == "to_person"))
+            cleaned = cls._normalize_fio(value, target=(field == "to_person"))
+            if any(w in TARGET_STOP_WORDS for w in cleaned.lower().split()):
+                return ""
+            return cleaned
         if field == "request_subject":
             return cls._clean_subject(value)
         if field == "from_department":
@@ -266,8 +271,12 @@ class NormalizationMixin:
             day = int(day_raw.translate(digit_map))
             month = int(month_raw.translate(digit_map))
             year_text = year_raw.translate(digit_map)
-            year = int("20" + year_text if len(year_text) == 2 else year_text)
-            if not 2015 <= year <= 2035:
+            if len(year_text) == 2:
+                yy = int(year_text)
+                year = 2000 + yy if yy <= 35 else 1900 + yy
+            else:
+                year = int(year_text)
+            if not 1920 <= year <= 2050:
                 return ""
             date(year, month, day)
             return f"{day:02d}.{month:02d}.{year:04d}"
@@ -285,19 +294,32 @@ class NormalizationMixin:
         text = value or ""
         digit = r"0-9OoОоIil|ЗзБб"
         patterns = (
-            rf"(?<!\w)([{digit}]{{1,2}})\s*[./,\\-]\s*([{digit}]{{1,2}})\s*[./,\\-]\s*([{digit}]{{2,4}})(?!\w)",
-            rf"(?<!\w)([{digit}]{{1,2}})\s+([{digit}]{{1,2}})\s+([{digit}]{{2,4}})(?!\w)",
+            rf"(?<!\w)([{digit}]{{1,2}})\s*[./,\\]\s*([{digit}]{{1,2}})\s*[./,\\]\s*([{digit}]{{2,4}})(?:\s*(?:[гГrR]\.?|[гГ]ода))?(?!\w)",
+            rf"(?<!\w)([{digit}]{{1,2}})\s+([{digit}]{{1,2}})\s+([{digit}]{{2,4}})(?:\s*(?:[гГrR]\.?|[гГ]ода))?(?!\w)",
         )
+        iso_pattern = rf"(?<!\w)([{digit}]{{4}})-([{digit}]{{1,2}})-([{digit}]{{1,2}})(?!\w)"
+        phone_marker_re = re.compile(r"(?i)\b(?:тел|факс|телефон|т/ф|phone|т)\b|\b8\s*\(|\+7")
+
         found: list[tuple[int, str]] = []
         for pattern in patterns:
             for match in re.finditer(pattern, text):
-                normalized = cls._date_from_parts(*match.groups())
+                if phone_marker_re.search(text[max(0, match.start() - 30):match.start()]):
+                    continue
+                normalized = cls._date_from_parts(*match.groups()[:3])
                 if normalized:
                     found.append((match.start(), normalized))
 
+        for match in re.finditer(iso_pattern, text):
+            if phone_marker_re.search(text[max(0, match.start() - 30):match.start()]):
+                continue
+            g = match.groups()
+            normalized = cls._date_from_parts(g[2], g[1], g[0])
+            if normalized:
+                found.append((match.start(), normalized))
+
         word_pattern = re.compile(
             r"\b(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|"
-            r"сентября|октября|ноября|декабря)\s+(\d{4})\b",
+            r"сентября|октября|ноября|декабря)\s+(\d{4})(?:\s*(?:[гГ]\.?|[гГ]ода))?(?!\w)",
             flags=re.IGNORECASE,
         )
         from datetime import date
@@ -309,7 +331,7 @@ class NormalizationMixin:
                 date(year, month, day)
             except (KeyError, ValueError):
                 continue
-            if 2015 <= year <= 2035:
+            if 1920 <= year <= 2050:
                 found.append((match.start(), f"{day:02d}.{month:02d}.{year:04d}"))
 
         found.sort(key=lambda item: item[0])
@@ -330,10 +352,10 @@ class NormalizationMixin:
         text = value or ""
         digit = r"0-9OoОоIil|ЗзБб"
         match = re.search(
-            rf"(?<!\w)([{digit}]{{1,2}})\s+([{digit}]{{1,2}})\s+([{digit}]{{2,4}})(?!\w)",
+            rf"(?<!\w)([{digit}]{{1,2}})\s+([{digit}]{{1,2}})\s+([{digit}]{{2,4}})(?:\s*(?:[гГrR]\.?|[гГ]ода))?(?!\w)",
             text,
         )
-        return cls._date_from_parts(*match.groups()) if match else ""
+        return cls._date_from_parts(*match.groups()[:3]) if match else ""
 
     @classmethod
     def _normalize_fio(cls, raw: str, *, target: bool = False) -> str:
@@ -353,13 +375,18 @@ class NormalizationMixin:
                 surname = cls._normalize_target_surname(surname)
             return f"{surname} {match.group(2).upper()}.{match.group(3).upper()}."
 
-        matches = list(re.finditer(r"([А-ЯЁ])\.?\s*([А-ЯЁ])\.?\s+([А-ЯЁа-яё-]{2,})", value))
+        matches = list(re.finditer(
+            r"(?:([А-ЯЁ])\.\s*([А-ЯЁ])\.\s*([А-ЯЁа-яё-]{2,})|([А-ЯЁ])\.?\s+([А-ЯЁ])\.?\s*([А-ЯЁа-яё-]{2,}))",
+            value,
+        ))
         if matches:
             match = matches[-1]
-            surname = match.group(3).capitalize()
-            if target:
-                surname = cls._normalize_target_surname(surname)
-            return f"{surname} {match.group(1).upper()}.{match.group(2).upper()}."
+            groups = [g for g in match.groups() if g is not None]
+            if len(groups) == 3:
+                surname = groups[2].capitalize()
+                if target:
+                    surname = cls._normalize_target_surname(surname)
+                return f"{surname} {groups[0].upper()}.{groups[1].upper()}."
 
         # Preserve full FIO instead of unnecessarily collapsing it to initials.
         # If a title precedes it, prefer the final three name-like words.
@@ -370,10 +397,153 @@ class NormalizationMixin:
                 if all(re.fullmatch(r"[А-ЯЁа-яё-]{2,}", part) for part in candidate):
                     normalized = [part.capitalize() for part in candidate]
                     if target:
-                        normalized[0] = cls._normalize_target_surname(normalized[0])
+                        if count == 3:
+                            normalized = cls._normalize_target_full_fio(normalized)
+                        else:
+                            normalized = cls._normalize_target_two_word_fio(normalized)
                     return " ".join(normalized)
 
         return value[:160]
+
+    _INDECLINABLE_SURNAME_ENDINGS = ("ко", "их", "ых", "иа", "уа", "дзе", "швили", "янц")
+
+    @classmethod
+    def _normalize_male_surname(cls, sur: str) -> str:
+        sur_low = sur.lower()
+        if sur_low.endswith(cls._INDECLINABLE_SURNAME_ENDINGS):
+            return sur
+        if sur_low.endswith(("овым", "евым", "иным", "яном")):
+            return sur[:-2]
+        if sur_low.endswith(("ина", "ину", "ине", "ова", "ову", "ове", "ева", "еву", "еве", "яна", "яну", "яне")):
+            return sur[:-1]
+        if sur_low.endswith(("ского", "цкого", "скому", "цкому")):
+            return sur[:-3] + "ий"
+        if sur_low.endswith(("ским", "цким", "ском", "цком")):
+            return sur[:-2] + "ий"
+        if sur_low.endswith(("ового", "евого", "овому", "евому")):
+            return sur[:-3]
+        if sur_low.endswith(("ого", "ому")):
+            return sur[:-3] + "ый"
+        if sur_low.endswith(("ым", "ом")):
+            return sur[:-2] + "ый"
+        return sur
+
+    @classmethod
+    def _normalize_female_surname(cls, sur: str) -> str:
+        sur_low = sur.lower()
+        if sur_low.endswith(cls._INDECLINABLE_SURNAME_ENDINGS):
+            return sur
+        if sur_low.endswith(("овой", "евой", "иной")):
+            return sur[:-2] + "а"
+        if sur_low.endswith(("ову", "еву", "ину")):
+            return sur[:-1] + "а"
+        if sur_low.endswith(("ской", "цкой", "ной", "вой")) or (
+            sur_low.endswith(("ой", "ую")) and not sur_low.endswith(("овой", "евой", "иной"))
+        ):
+            return sur[:-2] + "ая"
+        return sur
+
+    @classmethod
+    def _normalize_target_two_word_fio(cls, parts: list[str]) -> list[str]:
+        if len(parts) != 2:
+            return parts
+        sur, name = parts[0], parts[1]
+        sur_low = sur.lower()
+        name_low = name.lower()
+
+        MALE_GENITIVE_NAMES = {
+            "дмитрия", "василия", "юрия", "валерия", "григория", "анатолия",
+            "георгия", "евгения", "аркадия", "виталия", "геннадия", "илия",
+        }
+        if sur_low.endswith(("ова", "ева", "ина", "ая", "яя")) and name_low.endswith(("ия", "ья")):
+            if name_low not in MALE_GENITIVE_NAMES:
+                return [sur, name]
+
+        is_female = False
+        if sur_low.endswith(("овой", "евой", "иной", "ской", "цкой", "ая", "яя", "ной", "вой")):
+            is_female = True
+        elif sur_low.endswith(("ову", "еву", "ину")):
+            if name_low.endswith(("ию", "ью", "ии", "ьи", "а", "я")):
+                is_female = True
+            elif name_low.endswith("у") and not name_low.endswith(("ову", "еву", "ину")):
+                is_female = True
+
+        if is_female:
+            sur = cls._normalize_female_surname(sur)
+            if name_low.endswith(("ию", "ие", "ии")):
+                name = name[:-2] + "ия"
+            elif name_low.endswith(("ью", "ье", "ьи")):
+                name = name[:-2] + "ья"
+            elif name_low.endswith(("ой", "ей")) and len(name) > 3:
+                name = name[:-2] + "а"
+            elif name_low.endswith(("у", "е")) and len(name) > 2:
+                name = name[:-1] + "а"
+        else:
+            sur = cls._normalize_male_surname(sur)
+            if name_low.endswith(("ия", "ию", "ие", "ием")):
+                stem = name[:-3] if name_low.endswith("ием") else name[:-2]
+                name = stem + "ий"
+            elif name_low.endswith(("ея", "ею", "еем")):
+                stem = name[:-3] if name_low.endswith("еем") else name[:-2]
+                name = stem + "ей"
+            elif name_low.endswith(("ря", "рю")):
+                name = name[:-1] + "ь"
+            elif name_low.endswith("рем"):
+                name = name[:-2] + "ь"
+            elif name_low.endswith(("ом", "ем")) and len(name) > 3:
+                name = name[:-2]
+            elif name_low.endswith(("а", "у", "е")) and len(name) > 3:
+                name = name[:-1]
+
+        return [sur.capitalize(), name.capitalize()]
+
+    @classmethod
+    def _normalize_target_full_fio(cls, parts: list[str]) -> list[str]:
+        if len(parts) != 3:
+            return parts
+        sur, name, patr = parts[0], parts[1], parts[2]
+        patr_low = patr.lower()
+        name_low = name.lower()
+        if re.search(r"(?:ович|евич|ич)[а-яё]*$", patr_low):
+            patr = re.sub(r"(?:овича|овичу|овичем|овиче)$", "ович", patr, flags=re.I)
+            patr = re.sub(r"(?:евича|евичу|евичем|евиче)$", "евич", patr, flags=re.I)
+            patr = re.sub(r"(?:ича|ичу|ичем|иче)$", "ич", patr, flags=re.I)
+
+            if name_low.endswith(("ия", "ию", "ие", "ием")):
+                stem = name[:-3] if name_low.endswith("ием") else name[:-2]
+                name = stem + "ий"
+            elif name_low.endswith(("ея", "ею", "еем")):
+                stem = name[:-3] if name_low.endswith("еем") else name[:-2]
+                name = stem + "ей"
+            elif name_low.endswith(("ря", "рю")):
+                name = name[:-1] + "ь"
+            elif name_low.endswith("рем"):
+                name = name[:-2] + "ь"
+            elif name_low.endswith(("ом", "ем")) and len(name) > 3:
+                name = name[:-2]
+            elif name_low.endswith(("а", "у", "е")) and len(name) > 3:
+                name = name[:-1]
+
+            sur = cls._normalize_male_surname(sur)
+        elif re.search(r"(?:овн|евн|ичн|иничн)[а-яё]*$", patr_low):
+            patr = re.sub(r"(?:овны|овне|овну|овной)$", "овна", patr, flags=re.I)
+            patr = re.sub(r"(?:евны|евне|евну|евной)$", "евна", patr, flags=re.I)
+            patr = re.sub(r"(?:ичны|ичне|ичну|ичной)$", "ична", patr, flags=re.I)
+            patr = re.sub(r"(?:иничны|иничне|иничну|иничной)$", "инична", patr, flags=re.I)
+
+            if name_low.endswith(("ьи", "ье", "ью", "ьей")):
+                stem = name[:-3] if name_low.endswith("ьей") else name[:-2]
+                name = stem + "ья"
+            elif name_low.endswith(("ии", "ию", "ие", "ией")):
+                stem = name[:-3] if name_low.endswith("ией") else name[:-2]
+                name = stem + "ия"
+            elif name_low.endswith(("ой", "ей")) and len(name) > 3:
+                name = name[:-2] + "а"
+            elif name_low.endswith(("ы", "е", "у", "о")) and len(name) > 2:
+                name = name[:-1] + "а"
+
+            sur = cls._normalize_female_surname(sur)
+        return [sur.capitalize(), name.capitalize(), patr.capitalize()]
 
     @staticmethod
     def _looks_low_quality_value(field: str, value: str) -> bool:
@@ -387,7 +557,11 @@ class NormalizationMixin:
                 return True
             return len(value) < 4 or sum(ch.isalpha() for ch in value) < 3
         if field == "from_department":
-            return len(value) < 3 or value.lower() in {"запрос", "письмо", "документ"}
+            return (
+                len(value) < 3
+                or value.lower() in {"запрос", "письмо", "документ"}
+                or bool(re.match(r"^\d+[.\s]+(?:[A-Za-zА-Яа-яЁё]\s+)?\d{4}\b", value))
+            )
         if field == "request_subject":
             return len(value) < 12 or sum(ch.isalpha() for ch in value) < 8
         return False
@@ -400,15 +574,23 @@ class NormalizationMixin:
     def _normalize_target_name(cls, raw: str) -> str:
         return cls._normalize_fio(raw, target=True)
 
-    @staticmethod
-    def _normalize_target_surname(surname: str) -> str:
+    @classmethod
+    def _normalize_target_surname(cls, surname: str) -> str:
         val = surname.strip().capitalize()
         low = val.lower()
-        # Common Russian dative/genitive endings found after "на гр." / "в
-        # отношении".  Nominative surnames such as "Мамедова" must stay intact.
+        if low.endswith(cls._INDECLINABLE_SURNAME_ENDINGS):
+            return val
         for ending, replacement in (
             ("овой", "ова"), ("евой", "ева"), ("иной", "ина"),
+            ("овым", "ов"), ("евым", "ев"), ("иным", "ин"),
             ("ову", "ов"), ("еву", "ев"), ("ину", "ин"),
+            ("ове", "ов"), ("еве", "ев"), ("ине", "ин"),
+            ("ского", "ский"), ("цкого", "цкий"),
+            ("скому", "ский"), ("цкому", "цкий"),
+            ("ским", "ский"), ("цким", "цкий"),
+            ("ском", "ский"), ("цком", "цкий"),
+            ("ской", "ская"), ("цкой", "цкая"), ("жной", "жная"),
+            ("ной", "ная"), ("вой", "вая"),
         ):
             if low.endswith(ending) and len(val) > len(ending) + 1:
                 return val[:-len(ending)] + replacement
@@ -420,14 +602,36 @@ class NormalizationMixin:
             return ""
         text = unicodedata.normalize("NFKC", text)
         text = text.translate(LATIN_LOOKALIKE_MAP)
+        # Repair Latin characters mistakenly embedded by OCR inside predominantly Cyrillic words
+        mixed_map = {"i": "и", "n": "н", "u": "и", "t": "т", "d": "д", "m": "м", "r": "г"}
+        def _repair_word(m: re.Match) -> str:
+            word = m.group(0)
+            cyr_count = sum(1 for ch in word if ("а" <= ch.lower() <= "я" or ch.lower() == "ё"))
+            if cyr_count >= 2:
+                return "".join(mixed_map.get(ch, ch) for ch in word)
+            return word
+        text = re.sub(r"\b[A-Za-zА-ЯЁа-яё0-9\.\-_]+\b", _repair_word, text)
         # NFKC expands the numero sign № to "No"; restore the familiar Russian
         # notation so department names such as "ОП №8" remain readable.
         text = re.sub(r"\bN[оo]\s*(?=\d)", "№", text)
         return "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines() if line.strip())
 
-    @staticmethod
-    def _clean_subject(val: str) -> str:
+    _STATUTE_PREAMBLE_RE = re.compile(
+        r"(?i)\b(?:ст\.|стать[иейя]|упк|гпк|коап|апк|ук\s+рф|фз|федеральн\w+\s+закон|"
+        r"руководствуясь|на\s+основании|в\s+соответствии\s+с)\b"
+    )
+
+    @classmethod
+    def _clean_subject(cls, val: str) -> str:
         val = re.sub(r"\s+", " ", val).strip()
+        req_match = re.search(
+            r"(?i)\b(?:просим\s+вас|просим|прошу\s+вас|прошу|ходатайствую|требуется|необходимо)\b",
+            val,
+        )
+        if req_match and req_match.start() > 0:
+            prefix = val[:req_match.start()].strip()
+            if len(prefix) > 120 or cls._STATUTE_PREAMBLE_RE.search(prefix):
+                val = val[req_match.start():].strip()
         val = re.sub(r"^(?:просим\s+вас|просим|прошу\s+вас|прошу)\s+",
                      "", val, flags=re.IGNORECASE)
         val = re.sub(r"https?://\S+|www\.\S+|\S+@\S+", "", val)
@@ -435,10 +639,10 @@ class NormalizationMixin:
         # several OCR lines.
         val = re.split(
             r"(?i)\b(?:приложени(?:е|я)|исполнитель|с уважением|телефон|тел\.|"
-            r"электронная почта|e-mail|начальник|заместитель|директор|главный врач)\b",
+            r"электронная почта|e-mail|начальник|заместитель|директор|и\.?\s*о\.?\s*(?:главн\w*\s+)?врач\w*|главн\w*\s+врач\w*|врач\w*)\b",
             val, maxsplit=1,
         )[0]
-        val = re.sub(r"\s+", " ", val).strip(" .,:;—–-")
+        val = re.sub(r"\s+", " ", val).strip(" .,:;—–-?")
         if val:
             val = val[0].upper() + val[1:]
         return val[:SUBJECT_MAX_CHARS]
@@ -446,6 +650,23 @@ class NormalizationMixin:
     def _final_validate(self, result: dict[str, str]) -> dict[str, str]:
         for k, v in result.items():
             result[k] = re.sub(r"\s+", " ", v).strip()
+        dept = result.get("from_department", "")
+        if re.search(r"(?i)(?:кбсмп|бсмп|больниц\w*[^.\n]{0,60}?15|кб\s*№?\s*15)", dept):
+            dept_cleaned = re.sub(
+                r"(?i)\s*(?:государственн\w+\s+учреждени\w+.*|г[уа]з\s+.*|(?:«|\")?(?:клиническ\w+\s+)?(?:больниц\w*|кбсмп|бсмп)\s*.*15.*)",
+                "",
+                dept,
+            ).strip(" .,:;-")
+            if (
+                len(dept_cleaned) < 4
+                or re.match(r"^\d+[.\s]+(?:[A-Za-zА-Яа-яЁё]\s+)?\d{4}\b", dept_cleaned)
+                or dept_cleaned.lower() in {"гуз", "гбуз", "гауз", "больница", "кбсмп", "бсмп"}
+            ):
+                dept_cleaned = ""
+            result["from_department"] = dept_cleaned
+        target_person = result.get("to_person", "")
+        if target_person:
+            result["to_person"] = self._normalize_target_name(target_person)
         return result
 
     @staticmethod

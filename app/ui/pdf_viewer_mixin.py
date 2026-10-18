@@ -27,22 +27,54 @@ class PdfViewerMixin:
         pending = getattr(self, "_pending_highlight_page", None)
         if pending is not None and self.pdf_document.pageCount() > pending:
             self._pending_highlight_page = None
-            QTimer.singleShot(0, lambda page=pending: self._jump_to_pdf_page(page))
+            loc = getattr(self, "_pending_highlight_norm_pos", None)
+            self._pending_highlight_norm_pos = None
+            QTimer.singleShot(15, lambda page=pending, pos=loc: self._jump_to_pdf_page(page, pos))
 
-    def _jump_to_pdf_page(self, page_index: int):
+    def _jump_to_pdf_page(self, page_index: int, norm_pos: tuple[float, float] | None = None):
         if page_index < 0 or page_index >= self.pdf_document.pageCount():
             return
         nav = self.pdf_view.pageNavigator()
-        nav.jump(page_index, QPointF(0, 0), nav.currentZoom())
+        target_pt = QPointF(0, 0)
+        if norm_pos is not None:
+            try:
+                page_size = self.pdf_document.pagePointSize(page_index)
+                px = max(0.0, float(norm_pos[0]) * float(page_size.width()) - 24.0)
+                py = max(0.0, float(norm_pos[1]) * float(page_size.height()) - 36.0)
+                target_pt = QPointF(px, py)
+            except Exception:
+                target_pt = QPointF(0, 0)
+        nav.jump(page_index, target_pt, nav.currentZoom())
+        if norm_pos is not None:
+            try:
+                vbar = self.pdf_view.verticalScrollBar()
+                if vbar and vbar.maximum() > 0:
+                    target_val = int(vbar.maximum() * float(norm_pos[1]) - vbar.pageStep() * 0.15)
+                    vbar.setValue(max(0, min(vbar.maximum(), target_val)))
+            except Exception:
+                pass
 
     def _parser_regions_for_pdf(self, pdf_path: Path):
         diagnostics = getattr(self, "parser_diagnostics", {}) or {}
-        regions = diagnostics.get("field_regions") if isinstance(diagnostics, dict) else None
-        if isinstance(regions, dict) and any(regions.values()):
-            selected = getattr(self, "_highlight_field", None)
-            if selected and regions.get(selected):
-                return {selected: regions.get(selected) or []}
-            return regions
+        merged: dict[str, list[dict]] = {}
+        if isinstance(diagnostics, dict):
+            raw_regions = diagnostics.get("field_regions")
+            if isinstance(raw_regions, dict):
+                for k, v in raw_regions.items():
+                    if isinstance(v, list) and v:
+                        merged[k] = [x for x in v if isinstance(x, dict) and x.get("rect_norm")]
+            field_results = diagnostics.get("field_results")
+            if isinstance(field_results, dict):
+                for k, payload in field_results.items():
+                    if k not in merged and isinstance(payload, dict):
+                        s_blocks = [
+                            x for x in (payload.get("source_blocks") or [])
+                            if isinstance(x, dict) and x.get("rect_norm")
+                        ]
+                        if s_blocks:
+                            merged[k] = s_blocks
+        if merged:
+            return merged
         cache = getattr(self, "parser_cache", None)
         if cache is not None:
             try:
@@ -52,20 +84,27 @@ class PdfViewerMixin:
         return {}
 
     def _preview_path_with_parser_highlights(self, pdf_path: Path) -> Path:
+        selected = getattr(self, "_highlight_field", None)
+        if not selected:
+            return pdf_path
         regions = self._parser_regions_for_pdf(pdf_path)
         preview = getattr(self, "pdf_highlight_preview", None)
         if not regions or preview is None:
             return pdf_path
-        highlighted = preview.build(pdf_path, regions)
+        try:
+            highlighted = preview.build(pdf_path, regions, active_field=selected)
+        except TypeError:
+            highlighted = preview.build(pdf_path, regions)
         if highlighted is None:
             return pdf_path
-        pages = [
-            int(item.get("page_index", 0) or 0)
-            for items in regions.values()
-            for item in (items or [])
-            if isinstance(item, dict)
-        ]
-        self._pending_highlight_page = min(pages) if pages else None
+        target_items = regions.get(selected) or []
+        valid_items = [item for item in target_items if isinstance(item, dict)]
+        if valid_items:
+            first_item = min(valid_items, key=lambda x: int(x.get("page_index", 0) or 0))
+            self._pending_highlight_page = int(first_item.get("page_index", 0) or 0)
+            rect_norm = first_item.get("rect_norm") or []
+            if len(rect_norm) == 4 and selected:
+                self._pending_highlight_norm_pos = (float(rect_norm[0]), float(rect_norm[1]))
         return highlighted
 
     def _on_pdf_page_changed(self, page_index: int):
@@ -169,6 +208,11 @@ class PdfViewerMixin:
                 self.pdf_document.close()
             except Exception:
                 pass
+            was_visible = self.pdf_container.isVisible()
+            if not was_visible or self.pdf_view.zoomMode() == QPdfView.ZoomMode.FitInView:
+                self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+                self._update_zoom_label()
+
             display_path = self._preview_path_with_parser_highlights(pdf_path)
             self.pdf_document.load(str(display_path))
             self.current_pdf_path = pdf_path
@@ -177,9 +221,6 @@ class PdfViewerMixin:
             self.pdf_preview_title.setText(metrics.elidedText(
                 pdf_path.name, Qt.TextElideMode.ElideMiddle, 220))
             self.pdf_preview_title.setToolTip(str(pdf_path))
-
-            self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
-            self._update_zoom_label()
 
             if not self.pdf_container.isVisible():
                 self.pdf_container.show()

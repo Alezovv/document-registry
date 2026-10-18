@@ -137,6 +137,19 @@ def get_default_ner_engine(
         return _DEFAULT_ENGINE
 
 
+def release_default_ner_engine() -> bool:
+    """Unload the shared ONNX NER session to reclaim RAM after a batch."""
+    with _DEFAULT_LOCK:
+        engine = _DEFAULT_ENGINE
+        if engine is None:
+            return False
+        target = getattr(engine, "primary", engine)
+        unload_fn = getattr(target, "unload", None)
+        if callable(unload_fn):
+            return bool(unload_fn())
+        return False
+
+
 def reset_default_ner_engine_for_tests() -> None:
     global _DEFAULT_ENGINE, _DEFAULT_ENGINE_KEY
     with _DEFAULT_LOCK:

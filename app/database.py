@@ -650,14 +650,26 @@ class Database:
             is_dup_search = any(term in text.casefold() for term in ("дубликат", "дубликаты", "дубль", "дубли", "копи"))
             dup_or = f" OR r.id IN {dup_subquery}" if is_dup_search else ""
             if search_field == "Все поля":
-                where.append(
-                    "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD(r.received_date) LIKE ? OR CASEFOLD(r.due_date) LIKE ? "
-                    "OR CASEFOLD(r.completed_date) LIKE ? OR CASEFOLD(r.from_department) LIKE ? "
-                    "OR CASEFOLD(r.from_position) LIKE ? OR CASEFOLD(r.from_person) LIKE ? "
-                    "OR CASEFOLD(r.to_person) LIKE ? OR CASEFOLD(r.request_subject) LIKE ? "
-                    f"OR CASEFOLD(r.note) LIKE ? OR CASEFOLD(r.status) LIKE ? OR CASEFOLD(COALESCE(s.ocr_text,'')) LIKE ?{dup_or})"
-                )
-                params.extend([like] * 12)
+                fts_q = self._fts_query(text) if len(text) >= 3 else ""
+                if fts_q:
+                    where.append(
+                        "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD(r.received_date) LIKE ? OR CASEFOLD(r.due_date) LIKE ? "
+                        "OR CASEFOLD(r.completed_date) LIKE ? OR CASEFOLD(r.from_department) LIKE ? "
+                        "OR CASEFOLD(r.from_position) LIKE ? OR CASEFOLD(r.from_person) LIKE ? "
+                        "OR CASEFOLD(r.to_person) LIKE ? OR CASEFOLD(r.request_subject) LIKE ? "
+                        "OR CASEFOLD(r.note) LIKE ? OR CASEFOLD(r.status) LIKE ? "
+                        f"OR r.id IN (SELECT CAST(request_id AS INTEGER) FROM request_fts WHERE request_fts MATCH ?){dup_or})"
+                    )
+                    params.extend([like] * 11 + [fts_q])
+                else:
+                    where.append(
+                        "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD(r.received_date) LIKE ? OR CASEFOLD(r.due_date) LIKE ? "
+                        "OR CASEFOLD(r.completed_date) LIKE ? OR CASEFOLD(r.from_department) LIKE ? "
+                        "OR CASEFOLD(r.from_position) LIKE ? OR CASEFOLD(r.from_person) LIKE ? "
+                        "OR CASEFOLD(r.to_person) LIKE ? OR CASEFOLD(r.request_subject) LIKE ? "
+                        f"OR CASEFOLD(r.note) LIKE ? OR CASEFOLD(r.status) LIKE ? OR CASEFOLD(COALESCE(s.ocr_text,'')) LIKE ?{dup_or})"
+                    )
+                    params.extend([like] * 12)
             elif search_field == "Статус":
                 where.append(f"(CASEFOLD(r.status) LIKE ?{dup_or})")
                 params.append(like)
@@ -682,7 +694,12 @@ class Database:
         else:
             order_sql = " ORDER BY r.is_pinned DESC, r.id DESC"
 
-        base = " FROM requests r LEFT JOIN request_search_content s ON s.request_id = r.id"
+        needs_ocr_join = bool(text and search_field == "Все поля" and not (len(text) >= 3 and self._fts_query(text)))
+        base = (
+            " FROM requests r LEFT JOIN request_search_content s ON s.request_id = r.id"
+            if needs_ocr_join
+            else " FROM requests r"
+        )
         with self._get_connection() as conn:
             total = int(conn.execute("SELECT COUNT(*)" + base + where_sql, params).fetchone()[0])
             rows = conn.execute(
@@ -733,6 +750,18 @@ class Database:
                 "SELECT * FROM requests WHERE id = ?", (request_id,)
             ).fetchone()
             return None if row is None else self._row_to_request(row)
+
+    def get_requests_by_ids(self, request_ids) -> list[Request]:
+        ids = sorted({int(x) for x in request_ids if x is not None})
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM requests WHERE id IN ({placeholders}) ORDER BY is_pinned DESC, id DESC",
+                ids,
+            ).fetchall()
+        return [self._row_to_request(row) for row in rows]
 
     def add_request(self, request: Request):
         with self._get_connection() as conn:

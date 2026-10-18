@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -75,6 +77,34 @@ class DocumentParserError(RuntimeError):
     pass
 
 
+class SufficiencyResult(tuple):
+    """Backwards-compatible tuple (is_sufficient, reason) that also exposes .suggested_regions, .missing_reasons, and .preparsed_fields."""
+
+    def __new__(
+        cls,
+        is_sufficient: bool,
+        reason: str,
+        suggested_regions: list[dict[str, Any]] | None = None,
+        missing_reasons: list[str] | None = None,
+        preparsed_fields: dict[str, Any] | None = None,
+    ):
+        return super().__new__(cls, (is_sufficient, reason))
+
+    def __init__(
+        self,
+        is_sufficient: bool,
+        reason: str,
+        suggested_regions: list[dict[str, Any]] | None = None,
+        missing_reasons: list[str] | None = None,
+        preparsed_fields: dict[str, Any] | None = None,
+    ):
+        self.is_sufficient = is_sufficient
+        self.reason = reason
+        self.suggested_regions = suggested_regions or []
+        self.missing_reasons = missing_reasons or []
+        self.preparsed_fields = preparsed_fields or {}
+
+
 class DocumentParser(
     FilenameParsingMixin,
     NormalizationMixin,
@@ -101,11 +131,247 @@ class DocumentParser(
         self.correction_memory = correction_memory
         self.hybrid_enabled = bool(hybrid_enabled)
 
+    @classmethod
+    def suggest_retry_regions(
+        cls,
+        text: str,
+        blocks: list[dict[str, Any]] | None,
+        missing_reasons: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Identify minimal high-resolution scan zones targeting missing/ambiguous fields."""
+        import re
+
+        blocks_list = blocks or []
+        page_w = max((float(b.get("page_width", 0) or 0) for b in blocks_list), default=1000.0)
+        page_h = max((float(b.get("page_height", 0) or 0) for b in blocks_list), default=1400.0)
+        reasons = set(missing_reasons or [])
+
+        regions: list[dict[str, Any]] = []
+
+        needs_upper = (
+            any(
+                r in reasons
+                for r in (
+                    "missing_or_unreliable_date",
+                    "missing_department",
+                    "missing_document_number",
+                )
+            )
+            or not reasons
+        )
+        needs_lower = (
+            any(
+                r in reasons
+                for r in (
+                    "missing_signer",
+                    "missing_position",
+                    "role_confusion_signer_and_target",
+                )
+            )
+            or not reasons
+        )
+
+        # 1. Upper region (Header, Incoming Stamp, Document Number, Date)
+        if needs_upper:
+            anchor_stamp = None
+            for b in blocks_list:
+                by1 = float(b.get("y1", 0))
+                if by1 > page_h * 0.45:
+                    continue
+                bt = str(b.get("text", "")).strip()
+                if re.search(r"(?i)\b(?:вх\.?|входящ\w*|исх\.?|исходящ\w*|№|номер)\b", bt):
+                    anchor_stamp = b
+                    break
+
+            if anchor_stamp:
+                ax1 = float(anchor_stamp.get("x1", 0))
+                ay1 = float(anchor_stamp.get("y1", 0))
+                ax2 = float(anchor_stamp.get("x2", ax1))
+                ay2 = float(anchor_stamp.get("y2", ay1))
+                if ax1 < page_w * 0.5:
+                    nx0 = 0.0
+                    nx1 = min(1.0, max(0.68, (ax2 + 250.0) / page_w))
+                else:
+                    nx0 = max(0.0, min(0.35, (ax1 - 250.0) / page_w))
+                    nx1 = 1.0
+                ny0 = max(0.0, (ay1 - 80.0) / page_h)
+                ny1 = min(0.48, (ay2 + 250.0) / page_h)
+                regions.append({
+                    "field": "incoming_stamp",
+                    "norm_rect": (nx0, ny0, nx1, ny1),
+                    "reason": "anchor_stamp",
+                })
+            else:
+                regions.append({
+                    "field": "header_and_stamp",
+                    "norm_rect": (0.0, 0.0, 1.0, 0.42),
+                    "reason": "structural_fallback_upper",
+                })
+
+        # 2. Lower region (Signer, Position)
+        if needs_lower:
+            anchor_sig = None
+            for b in blocks_list:
+                by1 = float(b.get("y1", 0))
+                if by1 < page_h * 0.45:
+                    continue
+                bt = str(b.get("text", "")).strip()
+                if re.search(
+                    r"(?i)\b(?:судья|начальник|главн\w+\s+врач|инспектор|директор|майор|капитан|подполковник|лейтенант|уполномоченный|следователь|дознаватель|подпись|м\.п\.)\b",
+                    bt,
+                ):
+                    anchor_sig = b
+                    break
+
+            if anchor_sig:
+                ay1 = float(anchor_sig.get("y1", 0))
+                ny0 = max(0.45, (ay1 - 90.0) / page_h)
+                ny1 = 1.0
+                regions.append({
+                    "field": "signature",
+                    "norm_rect": (0.0, ny0, 1.0, ny1),
+                    "reason": "anchor_signature",
+                })
+            else:
+                regions.append({
+                    "field": "signature",
+                    "norm_rect": (0.0, 0.58, 1.0, 1.0),
+                    "reason": "structural_fallback_lower",
+                })
+
+        return regions
+
+    @classmethod
+    def is_extraction_sufficient(
+        cls,
+        text: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> SufficiencyResult:
+        """Lightweight pre-check to decide if OCR pass 1 is already reliable enough
+        to skip expensive 200 DPI retries and rotation retries.
+
+        Evaluates all core fields without loading heavy ML/NER models:
+        - received_date: from incoming stamp or header date (valid date format, not mid-paragraph event date).
+        - from_department: department/sender is present and >= 4 chars.
+        - doc_number: document number is present.
+        - from_position: position/title is present (or clear signature marker).
+        - from_person: signer FIO is present in signature/header.
+        - to_person: target person (if present) must NOT be confused with the signer or executor.
+        - request_subject: subject is present and meaningful (>= 10 chars).
+        """
+        if not text or len(text.strip()) < 50:
+            suggested = cls.suggest_retry_regions("", blocks, ["text_too_short"])
+            return SufficiencyResult(False, "text_too_short", suggested, ["text_too_short"])
+
+        blocks_list = blocks or []
+        zones = cls._layout_zones(text, blocks_list)
+        header_text = zones.get("header", "")
+        incoming_text = zones.get("incoming", "")
+        body_text = zones.get("body", "")
+        signature_text = zones.get("signature", "") or zones.get("footer", "")
+        content_text = zones.get("content", "") or body_text
+
+        missing_reasons: list[str] = []
+
+        # 1. Date: must come from incoming stamp or header
+        date_val = (
+            cls._extract_incoming_date(incoming_text or text, blocks_list)
+            or cls._extract_received_date(header_text, text)
+        )
+        if not date_val:
+            missing_reasons.append("missing_or_unreliable_date")
+
+        # 2. Sender / Department:
+        dept_val = cls._extract_department(header_text, text)
+        if not dept_val or len(dept_val.strip()) < 4:
+            missing_reasons.append("missing_department")
+
+        # 3. Document Number:
+        num_lines: list[str] = []
+        _seen_num_lines: set[str] = set()
+        for _l in (header_text + "\n" + "\n".join(text.splitlines()[:35])).splitlines():
+            _s = _l.strip()
+            if _s and _s not in _seen_num_lines:
+                _seen_num_lines.add(_s)
+                num_lines.append(_s)
+        num_header = "\n".join(num_lines[:35])
+        doc_num, doc_conf = cls._extract_document_number(num_header, blocks_list)
+        if not doc_num or doc_conf < 0.40:
+            missing_reasons.append("missing_document_number")
+
+        # 4. Signer:
+        signer_val = cls._extract_signer(signature_text or text, full_text=text)
+        if not signer_val:
+            missing_reasons.append("missing_signer")
+
+        # 5. Position:
+        pos_val = cls._extract_position(signature_text, body_text, header_text)
+        if not pos_val:
+            from app.ocr import OCR
+
+            if not OCR._has_signer_on_page(signature_text or text):
+                missing_reasons.append("missing_position")
+
+        # 6. Subject:
+        subj_val, subj_scores = cls._extract_subject_ranked(content_text)
+        if not subj_val:
+            subj_val, subj_scores = cls._extract_subject_ranked(text)
+        if not subj_val or len(subj_val.strip()) < 10:
+            missing_reasons.append("missing_subject")
+
+        # 7. Target person vs Signer (no role confusion):
+        to_person_val = cls._extract_to_person(content_text) or cls._extract_to_person(body_text)
+
+        clean_text = text.strip()
+        text_sha = hashlib.sha256(clean_text.encode("utf-8")).hexdigest()
+
+        preparsed = {
+            "_text_len": len(text),
+            "_text_hash": text_sha,
+            "received_date": date_val or "",
+            "from_department": dept_val or "",
+            "doc_number": doc_num or "",
+            "doc_number_confidence": doc_conf or 0.0,
+            "from_person": signer_val or "",
+            "from_position": pos_val or "",
+            "request_subject": subj_val or "",
+            "request_subject_scores": list(subj_scores) if subj_scores else [],
+            "to_person": to_person_val or "",
+        }
+
+        if missing_reasons:
+            suggested = cls.suggest_retry_regions(text, blocks_list, missing_reasons)
+            return SufficiencyResult(False, missing_reasons[0], suggested, missing_reasons, preparsed)
+
+        if to_person_val and signer_val:
+            norm_target = cls._normalize_target_name(to_person_val)
+            norm_signer = cls._normalize_person_name(signer_val)
+            t_parts = norm_target.split()
+            s_parts = norm_signer.split()
+            if t_parts and s_parts and t_parts[0] == s_parts[0]:
+                if len(t_parts) > 1 and len(s_parts) > 1 and t_parts[1][0] == s_parts[1][0]:
+                    suggested = cls.suggest_retry_regions(
+                        text, blocks_list, ["role_confusion_signer_and_target"]
+                    )
+                    return SufficiencyResult(
+                        False, "role_confusion_signer_and_target", suggested, ["role_confusion_signer_and_target"], preparsed
+                    )
+                if len(t_parts) == 1 or len(s_parts) == 1:
+                    suggested = cls.suggest_retry_regions(
+                        text, blocks_list, ["role_confusion_signer_and_target"]
+                    )
+                    return SufficiencyResult(
+                        False, "role_confusion_signer_and_target", suggested, ["role_confusion_signer_and_target"], preparsed
+                    )
+
+        return SufficiencyResult(True, "all_core_fields_reliable", [], [], preparsed)
+
     def parse(
         self,
         ocr_data: str | dict[str, Any],
         file_name: str = "",
     ) -> Request:
+        raw_preparsed = None
         if isinstance(ocr_data, dict):
             text = ocr_data.get("text", "")
             source_blocks = ocr_data.get("blocks", [])
@@ -117,6 +383,7 @@ class DocumentParser(
                 blocks.append(copied)
             if not file_name:
                 file_name = ocr_data.get("file_name", "")
+            raw_preparsed = ocr_data.get("_preparsed")
         else:
             text = str(ocr_data)
             blocks = []
@@ -124,6 +391,18 @@ class DocumentParser(
         text = self._prepare_ocr_text(text)
         if not text and not file_name:
             raise DocumentParserError("Текст после OCR пуст и имя файла не передано.")
+
+        preparsed: dict[str, Any] = {}
+        if isinstance(raw_preparsed, dict):
+            clean_body = re.sub(r"^---\s*Страница\s+\d+\s*---\s*", "", text).strip()
+            expected_hash = raw_preparsed.get("_text_hash")
+            current_sha = hashlib.sha256(clean_body.encode("utf-8")).hexdigest()
+            is_valid = (
+                expected_hash == current_sha
+                or (isinstance(expected_hash, int) and expected_hash == hash(clean_body[:200] + clean_body[-200:]))
+            )
+            if expected_hash is not None and is_valid:
+                preparsed = raw_preparsed
 
         explicit = self._extract_labeled_fields(text)
         spatial = self._extract_spatial_labeled_fields(blocks)
@@ -140,26 +419,48 @@ class DocumentParser(
         content_text = zones.get("content", "") or body_text
         self._subject_candidate_scores = []
 
+        subj = preparsed.get("request_subject")
+        if subj:
+            if preparsed.get("request_subject_scores"):
+                self._subject_candidate_scores = list(preparsed["request_subject_scores"])
+        else:
+            subj = (
+                self._extract_subject_with_scores(content_text)
+                or self._extract_subject_with_scores(text)
+            )
+
         heuristic = {
             "received_date": (
-                self._extract_incoming_date(incoming_text or text, blocks)
-                or self._extract_received_date(header_text, text)
+                preparsed.get("received_date")
+                or (
+                    self._extract_incoming_date(incoming_text or text, blocks)
+                    or self._extract_received_date(header_text, text)
+                )
             ),
-            "from_department": self._extract_department(header_text or text),
-            "from_position": self._extract_position(signature_text, body_text),
-            "from_person": self._extract_signer(signature_text or text),
+            "from_department": (
+                preparsed.get("from_department")
+                or self._extract_department(header_text, text)
+            ),
+            "from_position": (
+                preparsed.get("from_position")
+                or self._extract_position(signature_text, body_text, header_text)
+            ),
+            "from_person": (
+                preparsed.get("from_person")
+                or self._extract_signer(signature_text or text, full_text=text)
+            ),
             # Addressee zone is useful for labelled/form letters, but the semantic
             # target extractor still requires person-context before accepting a FIO.
             "to_person": (
-                self._extract_to_person(content_text)
-                or self._extract_to_person(body_text)
-                or self._extract_to_person(addressee_text)
-                or self._extract_to_person(text)
+                preparsed.get("to_person")
+                or (
+                    self._extract_to_person(content_text)
+                    or self._extract_to_person(body_text)
+                    or self._extract_to_person(addressee_text)
+                    or self._extract_to_person(text)
+                )
             ),
-            "request_subject": (
-                self._extract_subject_with_scores(content_text)
-                or self._extract_subject_with_scores(text)
-            ),
+            "request_subject": subj,
         }
 
         heuristic_confidence = {
@@ -173,8 +474,25 @@ class DocumentParser(
         sources: dict[str, str] = {}
         for field_name in FIELD_NAMES:
             if field_name in explicit and explicit[field_name]:
-                result[field_name] = explicit[field_name]
-                confidence[field_name] = 0.97 if field_name in spatial else 0.95
+                val = explicit[field_name]
+                result[field_name] = val
+                base_conf = 0.97 if field_name in spatial else 0.95
+                if blocks:
+                    val_key = self._label_key(val)
+                    matched_scores = [
+                        float(b["confidence"])
+                        for b in blocks
+                        if b.get("confidence") is not None
+                        and val_key
+                        and (val_key in self._label_key(str(b.get("text", ""))) or self._label_key(str(b.get("text", ""))) in val_key)
+                    ]
+                    if matched_scores:
+                        avg_ocr = sum(matched_scores) / len(matched_scores)
+                        if avg_ocr < 0.78:
+                            base_conf = max(0.58, round(0.55 + avg_ocr * 0.32, 3))
+                if self._looks_low_quality_value(field_name, val):
+                    base_conf = min(base_conf, 0.65)
+                confidence[field_name] = base_conf
                 sources[field_name] = "label/layout" if field_name in spatial else "label"
             else:
                 value = heuristic.get(field_name, "")
@@ -205,9 +523,25 @@ class DocumentParser(
                 sources[field_name] = "rejected"
 
         document_type = DocumentTypeClassifier.classify(text)
-        ner_entities = self.ner_engine.extract(text, blocks)
-        ner_metrics = dict(getattr(self.ner_engine, "last_metrics", {}) or {})
-        active_ner_engine = str(ner_metrics.get("active_engine") or self.ner_engine.name)
+        ner_target_fields = ("from_department", "from_person", "to_person")
+        all_ner_fields_strong = all(
+            bool(result.get(f)) and confidence.get(f, 0.0) >= 0.88
+            for f in ner_target_fields
+        )
+        if all_ner_fields_strong and getattr(self.ner_engine, "name", "") == "onnx-with-heuristic-fallback":
+            ner_entities = HeuristicRussianNerEngine().extract(text, blocks)
+            ner_metrics = {
+                "engine": self.ner_engine.name,
+                "active_engine": HeuristicRussianNerEngine.name,
+                "loaded": False,
+                "skipped_heavy_ner": True,
+                "entities": len(ner_entities),
+            }
+            active_ner_engine = HeuristicRussianNerEngine.name
+        else:
+            ner_entities = self.ner_engine.extract(text, blocks)
+            ner_metrics = dict(getattr(self.ner_engine, "last_metrics", {}) or {})
+            active_ner_engine = str(ner_metrics.get("active_engine") or self.ner_engine.name)
 
         # ML NER is compared against the cheap deterministic baseline on the same
         # OCR blocks.  The baseline is a shadow signal only when ML is active;
@@ -252,9 +586,21 @@ class DocumentParser(
 
         ner_candidates = NerCandidateAdapter.to_field_candidates(hybrid_ner_entities)
 
-        document_number, document_number_confidence = self._extract_document_number(
-            header_text + "\n" + "\n".join(text.splitlines()[:12]), blocks
-        )
+        if preparsed.get("doc_number"):
+            document_number = preparsed["doc_number"]
+            document_number_confidence = float(preparsed.get("doc_number_confidence", 0.0) or 0.0)
+        else:
+            num_lines: list[str] = []
+            _seen_num_lines: set[str] = set()
+            for _l in (header_text + "\n" + "\n".join(text.splitlines()[:35])).splitlines():
+                _s = _l.strip()
+                if _s and _s not in _seen_num_lines:
+                    _seen_num_lines.add(_s)
+                    num_lines.append(_s)
+            num_header = "\n".join(num_lines[:35])
+            document_number, document_number_confidence = self._extract_document_number(
+                num_header, blocks
+            )
         layout_zone_counts = LayoutAnalyzer.zone_counts(blocks)
         field_results: dict[str, dict[str, Any]] = {}
         default_zones = {
@@ -284,7 +630,7 @@ class DocumentParser(
                 explicit_source = "label/layout" if field_name in spatial else "label"
                 candidates.append(FieldCandidate(
                     field=field_name, value=explicit[field_name],
-                    confidence=0.97 if field_name in spatial else 0.95,
+                    confidence=confidence.get(field_name, 0.97 if field_name in spatial else 0.95),
                     source=explicit_source, zone=default_zones.get(field_name, PageZone.UNKNOWN.value),
                 ))
             if heuristic.get(field_name):
@@ -344,6 +690,19 @@ class DocumentParser(
                 confidence[field_name] = 0.0
                 if sources.get(field_name) not in {"none", "rejected"}:
                     sources[field_name] = "rejected"
+            elif blocks:
+                val_key = self._label_key(result[field_name])
+                matched_ocr = [
+                    float(b["confidence"])
+                    for b in blocks
+                    if b.get("confidence") is not None
+                    and val_key
+                    and (val_key in self._label_key(str(b.get("text", ""))) or self._label_key(str(b.get("text", ""))) in val_key)
+                ]
+                if matched_ocr:
+                    avg_ocr = sum(matched_ocr) / len(matched_ocr)
+                    if avg_ocr < 0.78:
+                        confidence[field_name] = min(confidence[field_name], round(0.55 + avg_ocr * 0.35, 3))
 
         # Re-locate regions after the hybrid result has become the actual form value.
         field_regions = self._locate_field_regions(result, blocks, sources)

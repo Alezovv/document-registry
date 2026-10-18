@@ -75,7 +75,29 @@ class LayoutAnalysisMixin:
                 line_text = re.sub(r"\s+", " ", line_text).strip()
                 if line_text:
                     output.append(line_text)
-        return "\n".join(output)
+        joined = "\n".join(output)
+        return cls._stitch_hyphenated_words(joined)
+
+    _COMPOUND_HYPHEN_PREFIXES = {
+        "врач", "судебно", "медико", "клинико", "лечебно", "санитарно", "военно",
+        "акушерско", "приемно", "экспертно", "диагностико", "социально",
+        "научно", "нормативно", "административно", "материально",
+        "письмо", "интернет", "онлайн", "экспресс", "генерал", "полковник", "майор", "капитан",
+        "премьер", "вице", "пресс", "шеф", "экс",
+        "северо", "юго", "западно", "восточно", "санкт",
+    }
+
+    @classmethod
+    def _stitch_hyphenated_words(cls, text: str) -> str:
+        def _replace(match: re.Match) -> str:
+            w1, w2 = match.group(1), match.group(2)
+            if (
+                w1.lower() in cls._COMPOUND_HYPHEN_PREFIXES
+                or w2.lower() in {"хирург", "терапевт", "педиатр", "запрос", "ответ", "сообщение"}
+            ):
+                return f"{w1}-{w2}\n"
+            return f"{w1}{w2}\n"
+        return re.sub(r"([А-ЯЁа-яё]{2,})-\n([а-яё]{2,})", _replace, text)
 
     @classmethod
     def _layout_zones(cls, text: str, blocks: list[dict[str, Any]]) -> dict[str, str]:
@@ -206,31 +228,117 @@ class LayoutAnalysisMixin:
                 continue
             prepared.append((block, key, x1, y1, x2, y2, width, height, page_index))
 
+        def _person_stem(word: str) -> str:
+            if len(word) <= 3:
+                return word
+            if word.endswith(("ский", "цкий", "ская", "цкая")):
+                return word[:-2]
+            if word.endswith(("ова", "ева", "ина", "ая", "яя")) and len(word) >= 5:
+                return word[:-1]
+            if word.endswith(("ович", "евич", "овна", "евна", "ична")) and len(word) >= 6:
+                return word[:-2]
+            return word[: max(3, len(word) - 1)]
+
+        def _person_block_score(
+            field_name: str,
+            value_key: str,
+            block_key: str,
+            y1: float,
+            height: float,
+        ) -> float:
+            v_parts = [p for p in value_key.split() if p]
+            if not v_parts:
+                return 0.0
+            surname = v_parts[0]
+            if len(surname) < 2:
+                return 0.0
+            sur_stem = _person_stem(surname)
+            b_words = block_key.split()
+            surname_matched = any(
+                bw == surname
+                or (len(sur_stem) >= 3 and bw.startswith(sur_stem) and abs(len(bw) - len(surname)) <= 4)
+                or (len(surname) >= 4 and SequenceMatcher(None, surname, bw).ratio() >= 0.78)
+                for bw in b_words
+            )
+            if not surname_matched:
+                return 0.0
+            score = 0.76
+            other_full = [p for p in v_parts[1:] if len(p) >= 3]
+            initials = [p for p in v_parts[1:] if len(p) == 1]
+            if other_full:
+                matched_other = sum(
+                    1
+                    for p in other_full
+                    if any(bw.startswith(_person_stem(p)) for bw in b_words)
+                )
+                if matched_other == len(other_full):
+                    score = 0.96
+                elif matched_other > 0:
+                    score = 0.88
+            elif initials:
+                if all(init in b_words for init in initials):
+                    score = 0.94
+                elif any(init in b_words for init in initials):
+                    score = 0.85
+            # Zone preference so signer highlights in signature zone and target person in body/addressee
+            yr = y1 / max(1.0, height)
+            if field_name == "from_person":
+                score += 0.03 if yr >= 0.50 else -0.05
+            elif field_name == "to_person":
+                score += 0.03 if yr <= 0.78 else -0.06
+            return min(1.0, max(0.0, score))
+
         for field_name in FIELD_NAMES:
             value = (result.get(field_name) or "").strip()
-            if not value or sources.get(field_name) in {"filename", "rejected", "none"}:
+            # Do not exclude "filename": if the person/department from the filename
+            # also appears inside the PDF text, we still want to highlight it!
+            if not value or sources.get(field_name) in {"rejected", "none"}:
                 continue
             value_key = cls._label_key(value)
             value_tokens = {t for t in value_key.split() if len(t) >= 3}
             ranked = []
             for item in prepared:
-                block, block_key, *_rest = item
-                block_tokens = {t for t in block_key.split() if len(t) >= 3}
-                if not block_tokens:
-                    continue
+                block, block_key, _x1, y1, _x2, _y2, _width, height, _page_index = item
                 if field_name == "received_date":
-                    score = 1.0 if value in cls._all_dates(str(block.get("text", ""))) else 0.0
+                    block_text = str(block.get("text", "") or "")
+                    dates = cls._all_dates(block_text)
+                    if value in dates:
+                        score = 1.0
+                        b_lower = block_text.lower()
+                        if any(marker in b_lower for marker in ("вх", "вход", "поступ", "регистр")):
+                            score += 0.35
+                        yr = y1 / max(1.0, height)
+                        if yr <= 0.35 or yr >= 0.70:
+                            score += 0.10
+                    else:
+                        d, m, y = value.split(".") if value.count(".") == 2 else ("", "", "")
+                        y_short = y[-2:] if len(y) == 4 else ""
+                        if value in block_text or (d and m and y_short and f"{d}.{m}.{y_short}" in block_text):
+                            score = 0.90
+                            b_lower = block_text.lower()
+                            if any(marker in b_lower for marker in ("вх", "вход", "поступ", "регистр")):
+                                score += 0.35
+                        else:
+                            score = 0.0
                 else:
-                    overlap = len(value_tokens & block_tokens) / max(1, min(len(value_tokens), len(block_tokens)))
+                    block_tokens = {t for t in block_key.split() if len(t) >= 3}
+                    if not block_tokens:
+                        continue
+                    overlap = len(value_tokens & block_tokens) / max(1, min(len(value_tokens), len(block_tokens))) if value_tokens else 0.0
                     similarity = SequenceMatcher(None, value_key, block_key).ratio()
                     contained = 1.0 if value_key in block_key or block_key in value_key else 0.0
                     score = max(contained, overlap * 0.9, similarity * 0.82)
+                    if field_name in {"from_person", "to_person"}:
+                        score = max(
+                            score,
+                            _person_block_score(field_name, value_key, block_key, y1, height),
+                        )
                 threshold = 0.42 if field_name == "request_subject" else 0.62
                 if score >= threshold:
                     ranked.append((score, item))
 
             ranked.sort(key=lambda pair: (-pair[0], pair[1][8], pair[1][3], pair[1][2]))
-            max_regions = 10 if field_name == "request_subject" else 3
+            max_regions = 10 if field_name == "request_subject" else (1 if field_name in {"from_person", "to_person", "received_date"} else 2)
             selected = []
             seen = set()
             for score, item in ranked[:max_regions * 2]:
@@ -314,19 +422,75 @@ class LayoutAnalysisMixin:
     def _extract_document_number(
         cls, header: str, blocks: list[dict[str, Any]]
     ) -> tuple[str, float]:
-        patterns = (
-            r"(?i)(?:исх\.?\s*)?№\s*([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9/\-]{1,30})",
-            r"(?i)\bN[oо]\.?\s*([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9/\-]{1,30})",
+        org_or_statute_prefix = re.compile(
+            r"(?i)(?:кбсмп|бсмп|больниц\w*|гкб|дгкб|поликлиник\w*|клиник\w*|мсч|"
+            r"судебн\w+\s*участ\w*|с/у|уч\w*|"
+            r"оп|омвд|умвд|ровд|мовд|отдел(?:\s*полици\w*)?|полици\w*|отделени\w*|"
+            r"детск\w+\s*сад\w*|моу|мадоу|мдоу|школ\w*|мбоу|"
+            r"ст|стать\w*|п|пункт|ч|част\w*|"
+            r"исполнительн\w+\s+производств\w*|"
+            r"кабинет|каб|офис|комн\w*|дом|д|корп\w*|строени\w*|стр)\s*№?\s*$"
         )
-        for pattern in patterns:
-            match = re.search(pattern, header or "")
-            if match:
-                value = match.group(1).strip(" .,:;—–-")
-                if value:
-                    return value, 0.86
-        # A split "№" + value is common in OCR forms. Use spatial proximity only.
+
+        lines = [line.strip() for line in (header or "").splitlines() if line.strip()]
+        candidates: list[tuple[float, str]] = []
+
+        for line_idx, line in enumerate(lines[:35]):
+            prev_context = " ".join(lines[max(0, line_idx - 2):line_idx + 1])
+            is_attorney = bool(re.search(r"(?i)\bдоверенност\w*", prev_context))
+
+            for match in re.finditer(
+                r"(?i)(?:(?P<ish>исх\.?\s*(?:№|N[oо]?\.?|N[\$º°_])?)|(?:№|N[oо]?\.?|N[\$º°_]))\s*(?P<num>[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9/\-]{0,30})",
+                line,
+            ):
+                val = (match.group("num") or "").strip(" .,:;—–-")
+                if not val:
+                    continue
+                # Document numbers must contain at least one digit
+                if not re.search(r"\d", val):
+                    continue
+                # Cannot be Russian word 'от' or lookalike '0т'
+                if re.fullmatch(r"(?i)[0оoO]\s*[тtT]", val) or val.lower() in {"от", "0т", "чта"}:
+                    continue
+                # Cannot consist purely of Russian words (like 'почта' or 'красноармейский')
+                if re.search(r"[а-яёА-ЯЁ]{3,}", val):
+                    continue
+                prefix = line[:match.start()].strip()
+                if org_or_statute_prefix.search(prefix):
+                    continue
+                # Hospital number 15 filter
+                if val == "15" and not match.group("ish"):
+                    continue
+                # Statute/article numbers
+                if val in {"144", "145", "150", "56", "57", "63", "86"} and not match.group("ish"):
+                    continue
+                if is_attorney and not match.group("ish"):
+                    continue
+
+                score = 50.0
+                if match.group("ish") or "исх" in line.lower():
+                    score += 45.0
+                if re.search(r"\bот\s+\d", line[match.end():]) or re.search(r"\d{2}\.\d{2}\.\d{4}", line):
+                    score += 35.0
+                # Structured case numbers like 2-1236/2026, 1-197-2026, 62-6-153
+                if re.search(r"\d+[-/]\d+", val):
+                    score += 40.0
+                if line_idx < 12:
+                    score += 15.0
+                candidates.append((score, val))
+
+        if candidates:
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            best_val = candidates[0][1]
+            best_score = min(0.96, candidates[0][0] / 100.0)
+            return best_val, round(best_score, 2)
+
+        # Spatial fallback when № and value are split into adjacent OCR blocks
         for block in blocks or []:
-            if not re.search(r"(?i)(?:^|\s)(?:№|N[oо])(?:\s|$)", str(block.get("text", ""))):
+            b_text = str(block.get("text", ""))
+            if not re.search(r"(?i)(?:^|\s)(?:№|N[oо])(?:\s|$)", b_text):
+                continue
+            if re.search(r"(?i)\b(?:кбсмп|бсмп|больниц\w*|детск\w+\s+сад\w*)\b", b_text):
                 continue
             try:
                 lx2 = float(block.get("x2", 0))
@@ -334,12 +498,23 @@ class LayoutAnalysisMixin:
                 lh = max(1.0, float(block.get("height", 1)))
             except (TypeError, ValueError):
                 continue
-            candidates = []
+            block_candidates = []
             for candidate in blocks:
                 if candidate is block:
                     continue
-                text = str(candidate.get("text", "")).strip()
+                text = str(candidate.get("text", "")).strip(" .,:;—–-")
                 if not re.fullmatch(r"[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9/\-]{1,30}", text):
+                    continue
+                # Document numbers must contain at least one digit
+                if not re.search(r"\d", text):
+                    continue
+                # Cannot consist of Russian words (e.g. 'Архивариусу', 'отделение')
+                is_ish_block = bool(re.search(r"(?i)\b(?:исх\.?|исходящ\w*)", b_text))
+                if (
+                    ((text == "15" or text in {"144", "145", "56", "57"}) and not is_ish_block)
+                    or re.fullmatch(r"(?i)[0оoO]\s*[тtT]", text)
+                    or text.lower() in {"от", "0т", "чта"}
+                ):
                     continue
                 try:
                     cx1 = float(candidate.get("x1", 0))
@@ -347,9 +522,9 @@ class LayoutAnalysisMixin:
                 except (TypeError, ValueError):
                     continue
                 if cx1 >= lx2 - 2 and abs(ccy - lcy) <= max(14.0, lh * 1.4):
-                    candidates.append((cx1 - lx2 + abs(ccy - lcy), text))
-            if candidates:
-                return min(candidates)[1], 0.82
+                    block_candidates.append((cx1 - lx2 + abs(ccy - lcy), text))
+            if block_candidates:
+                return min(block_candidates)[1], 0.82
         return "", 0.0
 
     @classmethod
@@ -381,8 +556,8 @@ class LayoutAnalysisMixin:
                     best = (score, term)
         return best[1] if best[0] >= threshold else ""
 
-    @staticmethod
-    def _split_zones(text: str, blocks: list[dict[str, Any]]) -> tuple[str, str, str]:
+    @classmethod
+    def _split_zones(cls, text: str, blocks: list[dict[str, Any]]) -> tuple[str, str, str]:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         total = len(lines)
         if total == 0:
@@ -413,10 +588,9 @@ class LayoutAnalysisMixin:
                     if (page_height * 0.28) <= y1 <= (page_height * 0.78):
                         body_blocks.append(b)
 
-                sort_key = lambda x: (int(x.get("page_index", 0) or 0), float(x.get("y1", 0) or 0), float(x.get("x1", 0) or 0))
-                h_text = "\n".join(str(b.get("text", "")) for b in sorted(header_blocks, key=sort_key))
-                b_text = "\n".join(str(b.get("text", "")) for b in sorted(body_blocks, key=sort_key))
-                f_text = "\n".join(str(b.get("text", "")) for b in sorted(footer_blocks, key=sort_key))
+                h_text = cls._reconstruct_layout_text(header_blocks)
+                b_text = cls._reconstruct_layout_text(body_blocks)
+                f_text = cls._reconstruct_layout_text(footer_blocks)
                 return h_text, b_text, f_text
 
         h_end = max(1, int(total * 0.35))

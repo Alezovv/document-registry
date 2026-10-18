@@ -52,6 +52,7 @@ class ImportDocumentDialog(QDialog):
 
         self.pdf_path = None
         self.pdf_queue = []
+        self._current_sha256 = None
         self.current_index = 0
         self.total_files = 0
         self.success_count = 0
@@ -351,14 +352,25 @@ class ImportDocumentDialog(QDialog):
         self.pdf_path = self.pdf_queue[self.current_index]
         self._current_ocr_data = None
         self._force_duplicate_current = False
+        self._current_sha256 = None
         if self._preflight_done_index != self.current_index and callable(self.preflight_callback):
             self._update_queue_row(self.current_index, "Проверка дубликата")
             try:
-                action = str(self.preflight_callback(str(self.pdf_path)) or "continue")
+                res = self.preflight_callback(str(self.pdf_path))
+                if isinstance(res, tuple):
+                    action = str(res[0] or "continue")
+                    sha256 = res[1] if len(res) > 1 else None
+                elif isinstance(res, dict):
+                    action = str(res.get("action", "continue"))
+                    sha256 = res.get("sha256")
+                else:
+                    action = str(res or "continue")
+                    sha256 = None
             except Exception as error:
-                action = "continue"
+                action, sha256 = "continue", None
                 self.notice.emit("Проверка дубликата", str(error), "warning")
             self._preflight_done_index = self.current_index
+            self._current_sha256 = sha256
             if action in {"skip", "open"}:
                 self.skipped_count += 1
                 self._update_queue_row(self.current_index, "Пропущен: дубликат")
@@ -419,7 +431,11 @@ class ImportDocumentDialog(QDialog):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
 
-        self.worker = OCRWorker(str(self.pdf_path), cache_dir=self.cache_dir)
+        self.worker = OCRWorker(
+            str(self.pdf_path),
+            cache_dir=self.cache_dir,
+            sha256=self._current_sha256,
+        )
         self.worker.text_ready.connect(self.ocr_finished)
         self.worker.error.connect(self.ocr_error)
         self.worker.progress.connect(self.ocr_progress)

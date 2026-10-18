@@ -181,6 +181,9 @@ class SmartDateEdit(QWidget):
         if hasattr(self, "editor"):
             self.editor.setToolTip(text)
 
+    def lineEdit(self) -> QLineEdit:
+        return self.editor
+
     def setFocus(self, reason=Qt.FocusReason.OtherFocusReason) -> None:
         self.editor.setFocus(reason)
         self.editor.selectAll()

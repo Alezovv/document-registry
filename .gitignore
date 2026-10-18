@@ -77,3 +77,9 @@ $RECYCLE.BIN/
 *.zip
 *.7z
 *.rar
+
+# Benchmarks and local test datasets
+benchmarks/
+benchmark_*.json
+dataset/
+dataset*/

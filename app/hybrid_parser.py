@@ -156,7 +156,13 @@ class HybridFieldResolver:
             memory_candidate_count=memory_count,
         )
 
-        if not baseline_value:
+        is_low_quality = False
+        if baseline_value:
+            from app.document_parser_parts.normalization import NormalizationMixin
+
+            is_low_quality = NormalizationMixin._looks_low_quality_value(field_name, baseline_value)
+
+        if not baseline_value or is_low_quality:
             if field_name in cls.BASELINE_LOCKED_FIELDS:
                 # Do not resurrect a subject that the deterministic parser
                 # intentionally rejected as low quality. This keeps the proven

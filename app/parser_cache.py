@@ -10,6 +10,8 @@ from typing import Any
 from app.models import Request
 
 CACHE_FORMAT_VERSION = 1
+OCR_ALGO_VERSION = "1.29.1"
+PARSE_RULES_REVISION = "1.29.1"
 DEFAULT_MAX_ENTRIES = 400
 DEFAULT_MAX_BYTES = 96 * 1024 * 1024
 
@@ -33,6 +35,7 @@ class ParserCache:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.max_entries = max(20, int(max_entries))
         self.max_bytes = max(8 * 1024 * 1024, int(max_bytes))
+        self._writes_since_prune = 0
 
     @staticmethod
     def content_hash(path: str | Path) -> str:
@@ -55,22 +58,32 @@ class ParserCache:
             return None
         return payload
 
-    def lookup(self, pdf_path: str | Path) -> tuple[str, dict[str, Any] | None]:
-        cache_key = self.content_hash(pdf_path)
-        return cache_key, self._read_key(cache_key)
+    def lookup(
+        self, pdf_path: str | Path, *, cache_key: str | None = None
+    ) -> tuple[str, dict[str, Any] | None]:
+        key = cache_key or self.content_hash(pdf_path)
+        return key, self._read_key(key)
 
-    def load_ocr(self, pdf_path: str | Path) -> tuple[str, dict[str, Any] | None]:
-        key, entry = self.lookup(pdf_path)
+    def load_ocr(
+        self, pdf_path: str | Path, *, cache_key: str | None = None
+    ) -> tuple[str, dict[str, Any] | None]:
+        key, entry = self.lookup(pdf_path, cache_key=cache_key)
         if not entry:
             return key, None
         ocr = entry.get("ocr")
-        if not isinstance(ocr, dict) or not str(ocr.get("text", "")).strip():
+        if (
+            not isinstance(ocr, dict)
+            or ocr.get("algo_version") != OCR_ALGO_VERSION
+            or not str(ocr.get("text", "")).strip()
+        ):
             return key, None
         copied = {
             "text": str(ocr.get("text", "")),
             "blocks": list(ocr.get("blocks") or []),
             "_cache_key": key,
         }
+        if "_preparsed" in ocr and isinstance(ocr["_preparsed"], dict):
+            copied["_preparsed"] = dict(ocr["_preparsed"])
         return key, copied
 
     def load_parse(
@@ -82,7 +95,11 @@ class ParserCache:
     ) -> tuple[Request, dict[str, Any]] | None:
         key = cache_key or self.content_hash(pdf_path)
         entry = self._read_key(key)
-        if not entry or entry.get("parser_version") != parser_version:
+        if (
+            not entry
+            or entry.get("parser_version") != parser_version
+            or entry.get("rules_revision") != PARSE_RULES_REVISION
+        ):
             return None
         data = entry.get("request")
         if not isinstance(data, dict):
@@ -115,10 +132,14 @@ class ParserCache:
         key = cache_key or self.content_hash(pdf_path)
         entry = self._read_key(key) or {"format_version": CACHE_FORMAT_VERSION}
         entry["pdf_size"] = self._safe_size(pdf_path)
-        entry["ocr"] = {
+        ocr_payload = {
+            "algo_version": OCR_ALGO_VERSION,
             "text": str(ocr_data.get("text", "")),
             "blocks": list(ocr_data.get("blocks") or []),
         }
+        if "_preparsed" in ocr_data and isinstance(ocr_data["_preparsed"], dict):
+            ocr_payload["_preparsed"] = dict(ocr_data["_preparsed"])
+        entry["ocr"] = ocr_payload
         self._write_key(key, entry)
         return key
 
@@ -135,6 +156,7 @@ class ParserCache:
         entry = self._read_key(key) or {"format_version": CACHE_FORMAT_VERSION}
         entry["pdf_size"] = self._safe_size(pdf_path)
         entry["parser_version"] = parser_version
+        entry["rules_revision"] = PARSE_RULES_REVISION
         # Cache only fields represented by Request. Runtime ids/source paths are
         # deliberately excluded from parsed inference.
         request_data = asdict(request)
@@ -151,7 +173,14 @@ class ParserCache:
         text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=self._json_default)
         temp.write_text(text, encoding="utf-8")
         os.replace(temp, target)
-        self.prune()
+        self._writes_since_prune += 1
+        custom_limits = (
+            self.max_entries < DEFAULT_MAX_ENTRIES
+            or self.max_bytes < DEFAULT_MAX_BYTES
+        )
+        if custom_limits or self._writes_since_prune >= 20:
+            self._writes_since_prune = 0
+            self.prune()
 
     def prune(self) -> None:
         entries = []

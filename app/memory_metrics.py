@@ -116,3 +116,21 @@ def trim_process_working_set() -> bool:
         return bool(kernel32.SetProcessWorkingSetSize(handle, minus_one, minus_one))
     except (AttributeError, OSError, ValueError):
         return False
+
+
+def set_process_below_normal_priority(below_normal: bool = True) -> bool:
+    """Temporarily set Windows process priority to BELOW_NORMAL during heavy OCR."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.SetPriorityClass.restype = wintypes.BOOL
+        handle = kernel32.GetCurrentProcess()
+        priority_class = 0x00004000 if below_normal else 0x00000020
+        return bool(kernel32.SetPriorityClass(handle, priority_class))
+    except (AttributeError, OSError, ValueError):
+        return False

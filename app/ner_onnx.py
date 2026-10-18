@@ -185,10 +185,14 @@ class OnnxRussianNerEngine(NerEngine):
     @staticmethod
     def _rss_mb() -> float | None:
         try:
-            psutil = importlib.import_module("psutil")
-            return round(float(psutil.Process(os.getpid()).memory_info().rss) / (1024 * 1024), 1)
+            from app.memory_metrics import process_memory_info
+
+            mem = process_memory_info()
+            if mem.current_bytes:
+                return round(float(mem.current_bytes) / (1024 * 1024), 1)
         except Exception:
-            return None
+            pass
+        return None
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
@@ -232,6 +236,9 @@ class OnnxRussianNerEngine(NerEngine):
             options.inter_op_num_threads = 1
             options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            memory_efficient = os.environ.get("DOCUMENT_REGISTRY_OCR_MEMORY_EFFICIENT", "1") == "1"
+            options.enable_cpu_mem_arena = not memory_efficient
+            options.enable_mem_pattern = not memory_efficient
             model_path = self._choose_model_path()
             session = ort.InferenceSession(
                 str(model_path),
@@ -396,6 +403,65 @@ class OnnxRussianNerEngine(NerEngine):
                 best[key] = entity
         return sorted(best.values(), key=lambda item: item.confidence, reverse=True)
 
+    _BODY_ROLE_HINT_RE = re.compile(
+        r"(?:(?i:\b(?:в\s+отношении|в\s+интересах|на\s+имя|гр\.|граждан\w*|пациент\w*|"
+        r"исп\.?|исполнитель|главн\w+\s+врач|начальник|директор|судья|следователь|дознаватель)\b)|"
+        r"[А-ЯЁ][а-яё-]{1,}\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.)"
+    )
+    _ACTIVE_ZONES = {
+        PageZone.HEADER.value,
+        PageZone.INCOMING.value,
+        PageZone.ADDRESSEE.value,
+        PageZone.SIGNATURE.value,
+        PageZone.EXECUTOR_FOOTER.value,
+        PageZone.UNKNOWN.value,
+    }
+
+    def unload(self) -> bool:
+        import gc
+        with self._load_lock:
+            with self._run_lock:
+                was_loaded = bool(self._loaded or self._session is not None)
+                self._session = None
+                self._tokenizer = None
+                self._np = None
+                self._loaded = False
+                self.last_metrics["loaded"] = False
+        if was_loaded:
+            gc.collect()
+        return was_loaded
+
+    def _run_chunk(
+        self,
+        chunk_text: str,
+        spans: list[tuple[int, int, dict[str, Any]]],
+        zone: str,
+    ) -> tuple[list[NerEntity], int, float]:
+        if len(spans) == 1:
+            return self._run_line(chunk_text, spans[0][2], zone)
+
+        raw_entities, token_count, elapsed = self._run_line(chunk_text, spans[0][2], zone)
+        mapped: list[NerEntity] = []
+        for entity in raw_entities:
+            ent_span = entity.metadata.get("span") or [0, 0]
+            e_start, e_end = int(ent_span[0]), int(ent_span[1])
+            chosen_block = spans[0][2]
+            local_start, local_end = e_start, e_end
+            for b_start, b_end, block in spans:
+                if b_start <= e_start < b_end:
+                    chosen_block = block
+                    local_start = max(0, e_start - b_start)
+                    local_end = max(local_start, min(b_end - b_start, e_end - b_start))
+                    break
+            entity.page_index = self._page(chosen_block)
+            entity.source_blocks = [dict(chosen_block)]
+            entity.metadata = {
+                **dict(entity.metadata),
+                "span": [local_start, local_end],
+            }
+            mapped.append(entity)
+        return mapped, token_count, elapsed
+
     def extract(self, text: str, blocks: Iterable[dict[str, Any]] = ()) -> list[NerEntity]:
         rss_before = self._rss_mb()
         self._ensure_loaded()
@@ -407,16 +473,51 @@ class OnnxRussianNerEngine(NerEngine):
                 if line.strip()
             ]
 
+        chunks: list[tuple[str, list[tuple[int, int, dict[str, Any]]], str]] = []
+        cur_parts: list[str] = []
+        cur_spans: list[tuple[int, int, dict[str, Any]]] = []
+        cur_zone: str | None = None
+        cur_page: int | None = None
+        cur_len = 0
+        max_chunk_chars = 360
+
+        def flush_chunk() -> None:
+            nonlocal cur_parts, cur_spans, cur_zone, cur_page, cur_len
+            if cur_parts and cur_zone is not None:
+                chunks.append(("\n".join(cur_parts), list(cur_spans), cur_zone))
+            cur_parts = []
+            cur_spans = []
+            cur_zone = None
+            cur_page = None
+            cur_len = 0
+
+        for block in annotated:
+            line = str(block.get("text", "") or "").strip()
+            if not line:
+                continue
+            zone = str(block.get("parser_zone", PageZone.UNKNOWN.value) or PageZone.UNKNOWN.value)
+            if zone not in self._ACTIVE_ZONES and not self._BODY_ROLE_HINT_RE.search(line):
+                continue
+            page = self._page(block)
+            projected = cur_len + (1 if cur_parts else 0) + len(line)
+            if cur_parts and (zone != cur_zone or page != cur_page or projected > max_chunk_chars):
+                flush_chunk()
+            start_offset = cur_len + (1 if cur_parts else 0)
+            if cur_parts:
+                cur_len += 1
+            cur_parts.append(line)
+            cur_spans.append((start_offset, start_offset + len(line), block))
+            cur_zone = zone
+            cur_page = page
+            cur_len += len(line)
+        flush_chunk()
+
         entities: list[NerEntity] = []
         total_tokens = 0
         inference_ms = 0.0
         with self._run_lock:
-            for block in annotated:
-                line = str(block.get("text", "") or "").strip()
-                if not line:
-                    continue
-                zone = str(block.get("parser_zone", PageZone.UNKNOWN.value) or PageZone.UNKNOWN.value)
-                found, token_count, elapsed = self._run_line(line, block, zone)
+            for chunk_text, spans, zone in chunks:
+                found, token_count, elapsed = self._run_chunk(chunk_text, spans, zone)
                 entities.extend(found)
                 total_tokens += token_count
                 inference_ms += elapsed
@@ -431,6 +532,7 @@ class OnnxRussianNerEngine(NerEngine):
             "load_ms": self._load_ms,
             "inference_ms": round(inference_ms, 1),
             "blocks": len(annotated),
+            "onnx_calls": len(chunks),
             "tokens": total_tokens,
             "entities": len(output),
             "min_confidence": self.min_confidence,

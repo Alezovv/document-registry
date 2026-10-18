@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Iterable
 
+from app.document_parser_parts.constants import TARGET_STOP_WORDS
 from app.parser_core import (
     EntityGroup,
     FieldCandidate,
@@ -256,6 +257,9 @@ class NerCandidateAdapter:
                     metadata={"ner_label": entity.label, "ner_engine": entity.engine},
                 ))
             elif entity.label == NerLabel.PERSON.value:
+                words = [w.lower().strip(" .,:;—–-") for w in entity.text.split()]
+                if any(w in TARGET_STOP_WORDS or "калмыков" in w for w in words):
+                    continue
                 if entity.zone == PageZone.ADDRESSEE.value:
                     output["to_person"].append(FieldCandidate(
                         field="to_person",

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QPoint, QRect, QSize, Qt
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QGridLayout,
+    QLayout,
+    QLayoutItem,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,6 +31,84 @@ from app.parser_review import FIELD_LABELS, REVIEWABLE_FIELDS, field_review_info
 from app.ui.pdf_viewer_mixin import PdfViewerMixin
 from app.ui.request_form_mixin import RequestFormMixin
 from app.ui.styles import APP_STYLE, DIALOG_STYLE, STATUSES
+
+
+class FlowLayout(QLayout):
+    """Компактный layout с переносом кнопок на следующую строку."""
+
+    def __init__(self, parent=None, spacing=6):
+        super().__init__(parent)
+        self._items = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(spacing)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+        self.invalidate()
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int):
+        if 0 <= index < len(self._items):
+            self.invalidate()
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize(0, 0)
+        # Минимальная ширина определяется самой широкой кнопкой, а не суммой
+        # всех вариантов — именно сумма раньше растягивала форму за пределы окна.
+        for item in self._items:
+            item_size = item.minimumSize()
+            size.setWidth(max(size.width(), item_size.width()))
+            size.setHeight(max(size.height(), item_size.height()))
+        left, top, right, bottom = self.getContentsMargins()
+        size += QSize(left + right, top + bottom)
+        return size
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        left, top, right, bottom = self.getContentsMargins()
+        x = rect.x() + left
+        y = rect.y() + top
+        line_height = 0
+        effective_right = rect.x() + rect.width() - right
+        spacing = max(0, self.spacing())
+
+        for item in self._items:
+            hint = item.sizeHint()
+            if line_height > 0 and x + hint.width() > effective_right:
+                x = rect.x() + left
+                y += line_height + spacing
+                line_height = 0
+
+            available_width = max(1, effective_right - x)
+            item_width = min(hint.width(), available_width)
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), QSize(item_width, hint.height())))
+            x += hint.width() + spacing
+            line_height = max(line_height, hint.height())
+
+        return y + line_height + bottom - rect.y()
 
 
 class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
@@ -69,7 +149,7 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         self.pdf_highlight_preview = PdfHighlightPreview()
         self._pending_highlight_page = None
         self._highlight_field = None
-        self._review_buttons = {}
+        self._review_buttons: dict[str, QPushButton] = {}
 
         self.pdf_document = QPdfDocument(self)
         self.current_pdf_path = None
@@ -78,7 +158,8 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         self.setWindowTitle(
             "Новый запрос" if request is None else "Редактирование запроса")
 
-        # Сделали стартовый размер меньше и убрали жесткое ограничение в 760px!
+        # Стартовый размер формы. Элементы вариантов переносятся внутри полей,
+        # поэтому содержимое не должно расширять окно за пределы экрана.
         self.resize(720, 760)
         self.setMinimumSize(500, 600)
 
@@ -122,6 +203,49 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
     def _confidence_text(value: float) -> str:
         return f"{max(0, min(100, round(float(value or 0.0) * 100)))}%"
 
+    def _set_review_field_value(self, field: str, value: str) -> None:
+        widget = self._review_widget(field)
+        if widget is None:
+            return
+        value = str(value or "")
+        if field == "received_date":
+            parsed = QDate.fromString(value, "dd.MM.yyyy")
+            if parsed.isValid():
+                widget.setDate(parsed)
+        elif isinstance(widget, QTextEdit):
+            widget.setPlainText(value)
+        elif isinstance(widget, QLineEdit):
+            widget.setText(value)
+        self._is_dirty = True
+
+    def _show_field_review_menu(self, field: str, button: QPushButton) -> None:
+        info = field_review_info(self.parser_diagnostics, field)
+        menu = QMenu(button)
+        current = str(info.get("value", "") or "").strip()
+        if current:
+            header = menu.addAction(f"Текущее: {current}")
+            header.setEnabled(False)
+        alternatives = info.get("alternatives") or []
+        if alternatives:
+            menu.addSeparator()
+            for item in alternatives[:3]:
+                if not isinstance(item, dict):
+                    continue
+                value = str(item.get("value", "") or "").strip()
+                if not value:
+                    continue
+                conf = self._confidence_text(float(item.get("confidence", 0.0) or 0.0))
+                source = str(item.get("source", "") or "")
+                action = menu.addAction(f"Использовать: {value}  · {conf}")
+                action.setToolTip(f"Источник: {source or '—'}")
+                action.triggered.connect(lambda _checked=False, f=field, v=value: self._set_review_field_value(f, v))
+        regions = info.get("source_blocks") or (self.parser_diagnostics.get("field_regions") or {}).get(field, [])
+        if regions:
+            menu.addSeparator()
+            source_action = menu.addAction("Показать источник в PDF")
+            source_action.triggered.connect(lambda _checked=False, f=field: self.focus_parser_source(f))
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+
     def _build_parser_review_bar(self, layout, parent) -> None:
         diagnostics = self.parser_diagnostics if isinstance(self.parser_diagnostics, dict) else {}
         results = diagnostics.get("field_results") or {}
@@ -140,10 +264,6 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         caption.setStyleSheet("color:#64748B; font-size:11px; font-weight:700;")
         outer.addWidget(caption)
 
-        # Confidence badges used to live in one QHBoxLayout. At the dialog's
-        # normal width that forced Qt to squeeze every button until long Russian
-        # labels were clipped. Keep the bar compact, but wrap badges into a
-        # three-column grid and size each button from its actual text.
         badges = QGridLayout()
         badges.setContentsMargins(0, 0, 0, 0)
         badges.setHorizontalSpacing(5)
@@ -194,49 +314,6 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         outer.addLayout(badges)
         layout.addWidget(bar)
 
-    def _set_review_field_value(self, field: str, value: str) -> None:
-        widget = self._review_widget(field)
-        if widget is None:
-            return
-        value = str(value or "")
-        if field == "received_date":
-            parsed = QDate.fromString(value, "dd.MM.yyyy")
-            if parsed.isValid():
-                widget.setDate(parsed)
-        elif isinstance(widget, QTextEdit):
-            widget.setPlainText(value)
-        elif isinstance(widget, QLineEdit):
-            widget.setText(value)
-        self._is_dirty = True
-
-    def _show_field_review_menu(self, field: str, button: QPushButton) -> None:
-        info = field_review_info(self.parser_diagnostics, field)
-        menu = QMenu(button)
-        current = str(info.get("value", "") or "").strip()
-        if current:
-            header = menu.addAction(f"Текущее: {current}")
-            header.setEnabled(False)
-        alternatives = info.get("alternatives") or []
-        if alternatives:
-            menu.addSeparator()
-            for item in alternatives[:3]:
-                if not isinstance(item, dict):
-                    continue
-                value = str(item.get("value", "") or "").strip()
-                if not value:
-                    continue
-                conf = self._confidence_text(float(item.get("confidence", 0.0) or 0.0))
-                source = str(item.get("source", "") or "")
-                action = menu.addAction(f"Использовать: {value}  · {conf}")
-                action.setToolTip(f"Источник: {source or '—'}")
-                action.triggered.connect(lambda _checked=False, f=field, v=value: self._set_review_field_value(f, v))
-        regions = info.get("source_blocks") or (self.parser_diagnostics.get("field_regions") or {}).get(field, [])
-        if regions:
-            menu.addSeparator()
-            source_action = menu.addAction("Показать источник в PDF")
-            source_action.triggered.connect(lambda _checked=False, f=field: self.focus_parser_source(f))
-        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
-
     def _resolve_pdf_path(self) -> Path | None:
         if getattr(self, "selected_pdf", None):
             candidate = Path(self.selected_pdf)
@@ -252,23 +329,160 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
                     return fallback
         return None
 
-    def focus_parser_source(self, field: str) -> None:
+    def _is_existing_saved_request(self) -> bool:
+        return bool(self.request is not None and getattr(self.request, "id", None) is not None)
+
+    def focus_parser_source(self, field: str, *, silent: bool = False) -> None:
         pdf_path = self._resolve_pdf_path()
         if pdf_path is None:
-            QMessageBox.information(self, "Источник поля", "PDF-файл не найден.")
+            if not silent:
+                QMessageBox.information(self, "Источник поля", "PDF-файл не найден.")
             return
         info = field_review_info(self.parser_diagnostics, field)
         regions = info.get("source_blocks") or (self.parser_diagnostics.get("field_regions") or {}).get(field, [])
+        if not regions and self.parser_cache is not None:
+            try:
+                cached_regions = self.parser_cache.load_regions(pdf_path)
+                regions = cached_regions.get(field, [])
+            except Exception:
+                regions = []
         if not regions:
-            QMessageBox.information(self, "Источник поля", "Для этого поля координаты источника не сохранены.")
+            self._highlight_field = None
+            if hasattr(self, "pdf_container") and self.pdf_container.isVisible():
+                self.toggle_pdf_viewer(True, pdf_path)
+            if not silent:
+                QMessageBox.information(self, "Источник поля", "Для этого поля координаты источника не сохранены.")
             return
         self._highlight_field = field
-        pages = [int(item.get("page_index", 0) or 0) for item in regions if isinstance(item, dict)]
-        self._pending_highlight_page = min(pages) if pages else 0
+        valid = [item for item in regions if isinstance(item, dict)]
+        if valid:
+            first_item = min(valid, key=lambda x: int(x.get("page_index", 0) or 0))
+            self._pending_highlight_page = int(first_item.get("page_index", 0) or 0)
+            rect_norm = first_item.get("rect_norm") or []
+            if len(rect_norm) == 4:
+                self._pending_highlight_norm_pos = (float(rect_norm[0]), float(rect_norm[1]))
+        else:
+            self._pending_highlight_page = 0
         self.toggle_pdf_viewer(True, pdf_path)
 
+    def _build_field_alternatives_row(self, field_key: str | None, parent_layout: QVBoxLayout, parent_widget: QWidget) -> None:
+        if not field_key or self._is_existing_saved_request():
+            return
+        info = field_review_info(self.parser_diagnostics, field_key)
+        alternatives = [
+            item for item in (info.get("alternatives") or [])
+            if isinstance(item, dict) and str(item.get("value", "") or "").strip()
+        ]
+        if not alternatives:
+            return
+
+        hint_lbl = QLabel("Варианты:", parent_widget)
+        hint_lbl.setStyleSheet("color:#64748B; font-size:10px; font-weight:600;")
+        parent_layout.addWidget(hint_lbl)
+
+        chips_widget = QWidget(parent_widget)
+        chips_widget.setMinimumWidth(0)
+        chips_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        chips_layout = FlowLayout(chips_widget, spacing=6)
+        for alt in alternatives[:3]:
+            val = str(alt.get("value", "") or "").strip()
+            conf = self._confidence_text(float(alt.get("confidence", 0.0) or 0.0))
+            src = str(alt.get("source", "") or "parser")
+
+            chip = QPushButton(parent=chips_widget)
+            chip.setProperty("_is_alternative_chip", True)
+            chip._is_alternative_chip = True
+            chip.setText(f"↻ {chip.fontMetrics().elidedText(val, Qt.TextElideMode.ElideMiddle, 165)} ({conf})")
+            chip.setFixedHeight(26)
+            chip.setMaximumWidth(240)
+            chip.setMinimumWidth(0)
+            chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setToolTip(
+                f"Нажмите, чтобы подставить вариант:\n{val}\nУверенность: {conf} · Источник: {src}"
+            )
+            chip.setStyleSheet(
+                "QPushButton { background:#EFF6FF; color:#1D4ED8; border:1px solid #BFDBFE; "
+                "border-radius:6px; padding:1px 7px; font-size:10px; font-weight:600; min-height:21px; } "
+                "QPushButton:hover { background:#DBEAFE; border-color:#93C5FD; }"
+            )
+            chip.clicked.connect(
+                lambda _checked=False, f=field_key, v=val: self._apply_alternative_chip(f, v)
+            )
+            chips_layout.addWidget(chip)
+
+        parent_layout.addWidget(chips_widget)
+
+    def _apply_alternative_chip(self, field: str, value: str) -> None:
+        self._set_review_field_value(field, value)
+        widget = self._review_widget(field)
+        self._clear_field_warning(widget)
+        if hasattr(self, "pdf_container") and self.pdf_container.isVisible():
+            self.focus_parser_source(field, silent=True)
+
+    def clear_parser_highlight(self) -> None:
+        """Clear active source highlight in the PDF preview and reload clean original PDF."""
+        if getattr(self, "_highlight_field", None) is not None:
+            self._highlight_field = None
+            pdf_path = self._resolve_pdf_path()
+            if pdf_path and hasattr(self, "pdf_container") and self.pdf_container.isVisible():
+                self.toggle_pdf_viewer(True, pdf_path)
+
+    def _is_pdf_control_widget(self, widget) -> bool:
+        if widget is None:
+            return False
+        if getattr(widget, "_is_alternative_chip", False) or widget.property("_is_alternative_chip"):
+            return True
+        pdf_controls = (
+            getattr(self, "btn_prev_page", None),
+            getattr(self, "btn_next_page", None),
+            getattr(self, "btn_zoom_in", None),
+            getattr(self, "btn_zoom_out", None),
+            getattr(self, "btn_fit_w", None),
+            getattr(self, "btn_fit_page", None),
+            getattr(self, "btn_ext", None),
+            getattr(self, "btn_close_pdf", None),
+            getattr(self, "zoom_label", None),
+            getattr(self, "pdf_page_label", None),
+            getattr(self, "pdf_preview_title", None),
+        )
+        curr = widget
+        while curr is not None:
+            if curr in pdf_controls:
+                return True
+            curr = getattr(curr, "parent", lambda: None)()
+        return False
+
+    def mousePressEvent(self, event):
+        if getattr(self, "_highlight_field", None) is not None:
+            self.clear_parser_highlight()
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        from PySide6.QtCore import Qt
+        if event.key() == Qt.Key.Key_Escape and getattr(self, "_highlight_field", None) is not None:
+            self.clear_parser_highlight()
+            return
+        super().keyPressEvent(event)
+
+    def eventFilter(self, watched, event):
+        from PySide6.QtCore import QEvent
+        if getattr(self, "_loaded", False):
+            if event.type() in (QEvent.Type.FocusIn, QEvent.Type.MouseButtonPress):
+                field_map = getattr(self, "_widget_to_review_field", {})
+                field_key = field_map.get(watched)
+                if field_key:
+                    if hasattr(self, "pdf_container") and self.pdf_container.isVisible():
+                        if getattr(self, "_highlight_field", None) != field_key:
+                            self.focus_parser_source(field_key, silent=True)
+                elif event.type() == QEvent.Type.MouseButtonPress:
+                    if getattr(self, "_highlight_field", None) is not None:
+                        if not self._is_pdf_control_widget(watched):
+                            self.clear_parser_highlight()
+        return super().eventFilter(watched, event)
+
     def _apply_parser_review_styles(self) -> None:
-        if self.request is not None:
+        if self._is_existing_saved_request():
             return
         for field in REVIEWABLE_FIELDS:
             widget = self._review_widget(field)
@@ -376,6 +590,8 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         edit._quick_date_buttons = quick_buttons
         quick.addStretch()
         layout.addLayout(quick)
+        if edit is getattr(self, "received_date", None):
+            self._build_field_alternatives_row("received_date", layout, box)
         return box
 
     def setup_ui(self):
@@ -546,15 +762,19 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         form_layout.setContentsMargins(30, 16, 30, 22)
         form_layout.setSpacing(14)
 
-        def create_field(label_text, widget, parent=None):
+        def create_field(label_text, widget, parent=None, field_key: str | None = None):
             box = QWidget(parent)
             layout = QVBoxLayout(box)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(6)
+            layout.setAlignment(Qt.AlignmentFlag.AlignTop)
             lbl = QLabel(label_text, box)
             lbl.setObjectName("fieldLabel")
             layout.addWidget(lbl)
             layout.addWidget(widget)
+            if field_key:
+                self._build_field_alternatives_row(field_key, layout, box)
+            layout.addStretch(1)
             return box
 
         # Поля ввода. SmartDateEdit защищает от случайного изменения даты колесом
@@ -699,18 +919,18 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         row2_1 = QHBoxLayout()
         row2_1.setSpacing(14)
         row2_1.addWidget(
-            create_field("Отдел", self.from_department, card2), 1
+            create_field("Отдел", self.from_department, card2, "from_department"), 1
         )
         row2_1.addWidget(
-            create_field("Должность", self.from_position, card2), 1
+            create_field("Должность", self.from_position, card2, "from_position"), 1
         )
 
         row2_2 = QHBoxLayout()
         row2_2.setSpacing(14)
         row2_2.addWidget(
-            create_field("От кого", self.from_person, card2), 1
+            create_field("От кого", self.from_person, card2, "from_person"), 1
         )
-        row2_2.addWidget(create_field("На кого", self.to_person, card2), 1)
+        row2_2.addWidget(create_field("На кого", self.to_person, card2, "to_person"), 1)
 
         card2_layout.addLayout(row2_1)
         card2_layout.addLayout(row2_2)
@@ -727,7 +947,7 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         card3_layout.addWidget(c3_title)
 
         card3_layout.addWidget(
-            create_field("Суть запроса", self.request_subject, card3)
+            create_field("Суть запроса", self.request_subject, card3, "request_subject")
         )
         card3_layout.addWidget(create_field("Примечание", self.note, card3))
 
@@ -1024,6 +1244,36 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
 
         self.pdf_container.hide()
         root_h_layout.addWidget(self.pdf_container, 1)
+
+        self._widget_to_review_field = {
+            self.received_date: "received_date",
+            self.from_department: "from_department",
+            self.from_position: "from_position",
+            self.from_person: "from_person",
+            self.to_person: "to_person",
+            self.request_subject: "request_subject",
+        }
+        for widget, f_key in list(self._widget_to_review_field.items()):
+            widget.installEventFilter(self)
+            for child in widget.findChildren(QWidget):
+                self._widget_to_review_field[child] = f_key
+                child.installEventFilter(self)
+            line_edit = getattr(widget, "lineEdit", None)
+            if callable(line_edit):
+                le = line_edit()
+                if le is not None:
+                    self._widget_to_review_field[le] = f_key
+                    le.installEventFilter(self)
+            viewport = getattr(widget, "viewport", None)
+            if callable(viewport):
+                vp = viewport()
+                if vp is not None:
+                    self._widget_to_review_field[vp] = f_key
+                    vp.installEventFilter(self)
+
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
+        self.installEventFilter(self)
 
         self._update_pdf_actions_state()
 

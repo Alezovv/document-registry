@@ -36,10 +36,41 @@ def apply_post_document_memory_policy():
     return governor.after_document(release_shared_ocr_engine)
 
 
+def _release_all_inference_engines() -> bool:
+    ocr_released = release_shared_ocr_engine()
+    ner_released = False
+    try:
+        from app.ner_runtime import release_default_ner_engine
+
+        ner_released = bool(release_default_ner_engine())
+    except Exception:
+        pass
+    return ocr_released or ner_released
+
+
+def warmup_ocr_engine_async() -> None:
+    """Pre-warm the shared ONNX OCR session in the background when dialog opens."""
+    import threading
+
+    def _task() -> None:
+        try:
+            governor = MemoryGovernor(resource_profile_from_environment())
+            decision = governor.sample()
+            if not decision.allow_heavy_task:
+                return
+            from app.ocr import OCR
+            if OCR._shared_ocr is None:
+                OCR()._get_engine()
+        except Exception:
+            pass
+
+    threading.Thread(target=_task, name="ocr-warmup", daemon=True).start()
+
+
 def finalize_ocr_batch_memory():
-    """Unload OCR and return the process to a stable idle footprint after a queue."""
+    """Unload OCR/NER and return the process to a stable idle footprint after a queue."""
     governor = MemoryGovernor(resource_profile_from_environment())
-    return governor.finalize_batch(release_shared_ocr_engine)
+    return governor.finalize_batch(_release_all_inference_engines)
 
 
 def prepare_ocr_memory_budget():
@@ -53,10 +84,16 @@ class OCRWorker(QThread):
     error = Signal(str)
     progress = Signal(int, str)
 
-    def __init__(self, pdf_path: str, cache_dir: str | Path | None = None):
+    def __init__(
+        self,
+        pdf_path: str,
+        cache_dir: str | Path | None = None,
+        sha256: str | None = None,
+    ):
         super().__init__()
         self.pdf_path = pdf_path
         self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.sha256 = str(sha256).strip() if sha256 else None
 
     def run(self):
         _lower_worker_priority()
@@ -89,18 +126,23 @@ class OCRWorker(QThread):
                 return
 
             cache = ParserCache(self.cache_dir) if self.cache_dir else None
+            cache_key = self.sha256 or ""
             if cache is not None:
                 self.progress.emit(2, "Проверка кэша распознавания...")
                 try:
-                    cache_key, cached_ocr = cache.load_ocr(self.pdf_path)
+                    cache_key, cached_ocr = cache.load_ocr(
+                        self.pdf_path, cache_key=self.sha256
+                    )
                 except OSError:
-                    cache_key, cached_ocr = "", None
+                    cache_key, cached_ocr = self.sha256 or "", None
                 if cached_ocr is not None:
                     self.progress.emit(55, "OCR взят из локального кэша.")
                     self.text_ready.emit(cached_ocr)
                     return
             else:
-                cache_key = ""
+                cache_key = self.sha256 or ""
+
+            from app.document_parser import DocumentParser
 
             self.progress.emit(2, "Подготовка OCR...")
             ocr = OCR()
@@ -109,6 +151,7 @@ class OCRWorker(QThread):
             ocr_data = ocr.recognize_pdf(
                 self.pdf_path,
                 progress_callback=self.progress.emit,
+                sufficiency_check=DocumentParser.is_extraction_sufficient,
             )
             if self.isInterruptionRequested():
                 return
@@ -118,7 +161,9 @@ class OCRWorker(QThread):
             if cache is not None:
                 try:
                     cache_key = cache.save_ocr(
-                        self.pdf_path, ocr_data, cache_key=cache_key or None
+                        self.pdf_path,
+                        ocr_data,
+                        cache_key=cache_key or self.sha256 or None,
                     )
                     ocr_data = dict(ocr_data)
                     ocr_data["_cache_key"] = cache_key

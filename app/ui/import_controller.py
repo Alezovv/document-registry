@@ -71,6 +71,11 @@ class ImportController(QObject):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+        try:
+            from app.import_workers import warmup_ocr_engine_async
+            warmup_ocr_engine_async()
+        except Exception:
+            pass
 
     def _on_dialog_finished(self, _result):
         self.dialog = None
@@ -100,12 +105,15 @@ class ImportController(QObject):
             return "skip"
         return "skip"
 
-    def _preflight_document(self, pdf_path: str) -> str:
+    def _preflight_document(self, pdf_path: str) -> tuple[str, str | None]:
         """Detect duplicates before OCR so repeated PDFs cost almost no RAM/CPU."""
+        fp = self.request_service.fingerprints.fingerprint(pdf_path)
+        sha256 = fp.sha256 if fp is not None else None
         duplicate = self.request_service.find_duplicate_document(pdf_path)
         if duplicate is None:
-            return "continue"
-        return self._choose_duplicate_action(duplicate, initial=True)
+            return "continue", sha256
+        action = self._choose_duplicate_action(duplicate, initial=True)
+        return action, sha256
 
     def _open_existing_request(self, request) -> None:
         try:

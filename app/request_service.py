@@ -74,7 +74,20 @@ class RequestService:
         self, before: Request, after: Request, context: dict | None = None
     ) -> int:
         """Learn explicit review edits together with safe parser context."""
-        return self.parser_corrections.learn(before, after, context=context)
+        learned = self.parser_corrections.learn(before, after, context=context)
+        try:
+            confirmed_dept = (after.from_department or "").strip()
+            if confirmed_dept:
+                from app.blank_fingerprint_memory import get_blank_fingerprint_memory
+
+                raw_header = getattr(before, "_ocr_text", "") or getattr(after, "_ocr_text", "") or ""
+                if not raw_header and isinstance(context, dict):
+                    raw_header = context.get("raw_text", "") or context.get("header_text", "")
+                if raw_header:
+                    get_blank_fingerprint_memory().learn_from_header(raw_header[:650], confirmed_dept)
+        except Exception:
+            pass
+        return learned
 
     def get_deadline_summary(self) -> tuple[int, int]:
         return self.database.get_deadline_summary()
@@ -476,9 +489,7 @@ class RequestService:
             raise ValueError("Недопустимый режим срока исполнения.")
 
         updated: list[Request] = []
-        for current in self.database.get_requests():
-            if current.id not in ids:
-                continue
+        for current in self.database.get_requests_by_ids(ids):
             request = replace(current)
 
             if status is not None:
