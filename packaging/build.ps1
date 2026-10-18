@@ -1,8 +1,8 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "1.28.9",
+    [string]$Version = "1.29.0",
     [string]$PublishTo = "",
-    [string]$ReleaseNotes = "DocumentRegistry 1.28.9: надежное обновление Windows без блокировки DLL (WinError 5), безусловный автооткат, проверка места на диске и самовосстановление.",
+    [string]$ReleaseNotes = "DocumentRegistry 1.29.0: Native-Text Fast-Path, Zonal OCR, оптимизация потребления памяти и повышение точности извлечения реквизитов.",
     [string]$PackageFileId = "",
     [switch]$PublishExisting,
     [switch]$ManifestOnly
