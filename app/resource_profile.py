@@ -115,10 +115,14 @@ def _nominal_ram_gb(actual_gib: float) -> float:
 
 def _auto_profile(logical_cpus: int, ram_gb: float) -> tuple[str, int, int, int, int, int]:
     nominal = _nominal_ram_gb(ram_gb)
-    if logical_cpus <= 2 or (nominal and nominal <= 4):
+    if logical_cpus <= 2:
         return "Экономный", 1, 125, 160, 1700, 2400
+    if nominal and nominal <= 4:
+        threads = 2 if logical_cpus >= 4 else 1
+        return "Экономный", threads, 125, 160, 1700, 2400
     if logical_cpus <= 4 or (nominal and nominal < 8):
-        return "Сбалансированный", 1, 140, 180, 2000, 2850
+        threads = 2 if logical_cpus >= 4 else 1
+        return "Сбалансированный", threads, 140, 180, 2000, 2850
     if logical_cpus <= 8 or (nominal and nominal < 12):
         return "Производительный", 2, 155, 200, 2400, 3400
     # 16 GB laptops deliberately keep two OCR threads in Auto to preserve

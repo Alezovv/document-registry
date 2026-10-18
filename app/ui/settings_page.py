@@ -300,7 +300,7 @@ class SettingsPage(QWidget):
         self.performance_mode_combo = NoWheelComboBox()
         self.performance_mode_combo.setMinimumHeight(40)
         self.performance_mode_combo.setMinimumWidth(220)
-        for key in ("economy", "auto", "performance"):
+        for key in ("auto", "economy", "performance"):
             self.performance_mode_combo.addItem(PERFORMANCE_MODE_LABELS[key], key)
         index = self.performance_mode_combo.findData(self.performance_mode)
         self.performance_mode_combo.setCurrentIndex(max(0, index))
@@ -512,9 +512,9 @@ class SettingsPage(QWidget):
             return
         mode = str(self.performance_mode_combo.currentData() or "auto")
         descriptions = {
-            "economy": "Строгий бюджет памяти: 1 OCR-поток, цель до ~1 ГБ RAM, выгрузка OCR при давлении памяти и последовательные тяжёлые задачи.",
-            "auto": "Рекомендуется: на ПК примерно с 4 ГБ RAM автоматически включается политика экономного режима; на более мощных системах лимиты мягче.",
-            "performance": "Больше OCR-потоков и быстрый кэш памяти. Используйте только когда системе хватает RAM.",
+            "auto": "Рекомендуется: автоматический подбор потоков и лимитов памяти под характеристики текущего ПК при каждом запуске.",
+            "economy": "Строгий режим: 1 OCR-поток, лимит до ~1 ГБ RAM, выгрузка OCR при давлении памяти и последовательные тяжёлые задачи.",
+            "performance": "Максимальная скорость: больше OCR-потоков и быстрый кэш памяти. Используйте, если системе хватает RAM.",
         }
         suffix = " Применяется сразу после сохранения настроек."
         self.performance_mode_hint.setText(descriptions.get(mode, descriptions["auto"]) + suffix)
