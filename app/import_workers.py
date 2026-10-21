@@ -49,7 +49,7 @@ def _release_all_inference_engines() -> bool:
 
 
 def warmup_ocr_engine_async() -> None:
-    """Pre-warm the shared ONNX OCR session in the background when dialog opens."""
+    """Pre-warm the shared ONNX OCR session and NER in the background when dialog opens."""
     import threading
 
     def _task() -> None:
@@ -61,6 +61,11 @@ def warmup_ocr_engine_async() -> None:
             from app.ocr import OCR
             if OCR._shared_ocr is None:
                 OCR()._get_engine()
+            try:
+                from app.ner_runtime import get_default_ner_engine
+                get_default_ner_engine()
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -148,9 +153,15 @@ class OCRWorker(QThread):
             ocr = OCR()
             if self.isInterruptionRequested():
                 return
+
+            def _progress_callback(val: int, msg: str) -> None:
+                if self.isInterruptionRequested():
+                    raise InterruptedError("OCR interrupted")
+                self.progress.emit(val, msg)
+
             ocr_data = ocr.recognize_pdf(
                 self.pdf_path,
-                progress_callback=self.progress.emit,
+                progress_callback=_progress_callback,
                 sufficiency_check=DocumentParser.is_extraction_sufficient,
             )
             if self.isInterruptionRequested():
@@ -172,7 +183,7 @@ class OCRWorker(QThread):
 
             self.progress.emit(55, "OCR завершён.")
             self.text_ready.emit(ocr_data)
-        except Exception as error:
+        except (InterruptedError, Exception) as error:
             if not self.isInterruptionRequested():
                 self.error.emit(str(error))
         finally:

@@ -1,8 +1,8 @@
-param(
+﻿param(
     [string]$Python = "python",
-    [string]$Version = "1.29.0",
+    [string]$Version = "1.30.1",
     [string]$PublishTo = "",
-    [string]$ReleaseNotes = "DocumentRegistry 1.29.0: Native-Text Fast-Path, Zonal OCR, оптимизация потребления памяти и повышение точности извлечения реквизитов.",
+    [string]$ReleaseNotes = "DocumentRegistry 1.30.1: Безопасный откат обновлений, безопасное восстановление снимков БД, слияние БД без потери записей, защита от zip-бомб и Excel formula injection, экспорт всех записей выборки.",
     [string]$PackageFileId = "",
     [switch]$PublishExisting,
     [switch]$ManifestOnly
@@ -40,9 +40,16 @@ if ($SchemaSource -notmatch 'CURRENT_SCHEMA_VERSION\s*=\s*(\d+)') {
 }
 $DatabaseSchema = [int]$Matches[1]
 
+$DriveManifestFileId = ""
+$LocalConfigFile = Join-Path $Root "app\update_config_local.py"
 $UpdateConfigFile = Join-Path $Root "app\update_config.py"
-$DriveManifestFileId = "1DAYJCCB1eO0zSvqNeWsWJREXbyMoSse8"
-if (Test-Path -LiteralPath $UpdateConfigFile -PathType Leaf) {
+if (Test-Path -LiteralPath $LocalConfigFile -PathType Leaf) {
+    $LocalSource = Get-Content -LiteralPath $LocalConfigFile -Raw
+    if ($LocalSource -match 'UPDATE_MANIFEST_FILE_ID\s*=\s*["'']([^"'']+)["'']') {
+        $DriveManifestFileId = [string]$Matches[1]
+    }
+}
+if ([string]::IsNullOrWhiteSpace($DriveManifestFileId) -and (Test-Path -LiteralPath $UpdateConfigFile -PathType Leaf)) {
     $ConfigSource = Get-Content -LiteralPath $UpdateConfigFile -Raw
     if ($ConfigSource -match 'UPDATE_MANIFEST_FILE_ID\s*=\s*["'']([^"'']+)["'']') {
         $DriveManifestFileId = [string]$Matches[1]
@@ -400,6 +407,8 @@ function New-ReleaseZipWithRetry(
                 Remove-Item -LiteralPath $ZipStageRoot -Recurse -Force -ErrorAction SilentlyContinue
                 New-Item -ItemType Directory -Path $ZipStageRoot -Force | Out-Null
                 Copy-Item -LiteralPath $SourceDirectory -Destination $ZipStagePortable -Recurse -Force -ErrorAction Stop
+                Get-ChildItem -LiteralPath $ZipStageRoot -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                Get-ChildItem -LiteralPath $ZipStageRoot -Recurse -File -Filter "*.pyc" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
                 break
             }
             catch {
@@ -486,6 +495,10 @@ function Publish-UpdatePackage(
         Copy-Item (Join-Path $PortableSource "DocumentRegistry.exe") (Join-Path $Payload "DocumentRegistry.exe") -Force
         Copy-Item (Join-Path $PortableSource "_internal") (Join-Path $Payload "_internal") -Recurse -Force
         Copy-Item (Join-Path $PortableSource "updater\DocumentRegistryUpdater.exe") (Join-Path $PayloadUpdater "DocumentRegistryUpdater.exe") -Force
+
+        # Clean any byte-compiled artifacts from update payload
+        Get-ChildItem -LiteralPath $Payload -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $Payload -Recurse -File -Filter "*.pyc" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
         $VersionFile = Join-Path $PortableSource "version.json"
         if (Test-Path -LiteralPath $VersionFile -PathType Leaf) {

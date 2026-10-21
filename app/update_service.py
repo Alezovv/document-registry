@@ -159,6 +159,31 @@ def sha256_file(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def validate_download_url(url: str) -> str:
+    """Validate that the download URL uses HTTPS and points to an authorized Google Drive host."""
+    if not url or not isinstance(url, str):
+        raise UpdateError("URL обновления не может быть пустым.")
+    url = url.strip()
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except Exception as e:
+        raise UpdateError(f"Некорректный URL: {e}") from e
+
+    if parsed.scheme.lower() != "https":
+        raise UpdateError(f"Небезопасная схема URL: {parsed.scheme!r}. Разрешён только HTTPS.")
+    if parsed.username or parsed.password:
+        raise UpdateError("URL не должен содержать учетные данные (userinfo).")
+    if parsed.port and parsed.port != 443:
+        raise UpdateError(f"Недопустимый порт в URL: {parsed.port}")
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise UpdateError("В URL отсутствует имя хоста.")
+    allowed_exact = {"drive.google.com", "docs.google.com", "drive.usercontent.google.com"}
+    if hostname in allowed_exact or hostname == "googleusercontent.com" or hostname.endswith(".googleusercontent.com"):
+        return url
+    raise UpdateError(f"Недопустимый хост для скачивания обновления: {hostname}")
+
+
 class UpdateService:
     """Update discovery, version rollback discovery, and package preparation.
 
@@ -329,9 +354,15 @@ class UpdateService:
                 names = set(archive.namelist())
                 if "update_manifest.json" not in names:
                     raise UpdateError("В архиве отсутствует update_manifest.json.")
-                raw_manifest = loads_json_with_fallback(
-                    archive.read("update_manifest.json")
-                )
+                manifest_info = archive.getinfo("update_manifest.json")
+                max_manifest_bytes = 5 * 1024 * 1024
+                if manifest_info.file_size > max_manifest_bytes:
+                    raise UpdateError("Файл update_manifest.json превышает допустимый размер.")
+                with archive.open("update_manifest.json", "r") as mf:
+                    manifest_bytes = mf.read(max_manifest_bytes + 1)
+                if len(manifest_bytes) > max_manifest_bytes:
+                    raise UpdateError("Файл update_manifest.json превышает допустимый размер.")
+                raw_manifest = loads_json_with_fallback(manifest_bytes)
         except UpdateError:
             raise
         except (OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -435,6 +466,8 @@ class UpdateService:
         )
 
     def _check_google_drive(self, current_version: str) -> UpdateInfo | None:
+        if not self.manifest_file_id:
+            return None
         # Do not enumerate/scrape the Drive folder.  Google changes folder HTML
         # independently of the public file download endpoint.  The manifest has
         # a stable file ID and names the exact package file ID for each release.
@@ -541,6 +574,8 @@ class UpdateService:
         *,
         direction: str = "older",
     ) -> list[UpdateInfo]:
+        if not self.manifest_file_id:
+            return []
         manifest_bytes = self._read_drive_file(self.manifest_file_id, MAX_MANIFEST_BYTES)
         try:
             raw = loads_json_with_fallback(manifest_bytes)
@@ -871,67 +906,42 @@ class UpdateService:
                 continue
         return items
 
-    def _downgrade_live_database_for_rollback(self, target_schema: int) -> Path | None:
-        """Downgrade the working database in-place after saving a temporary restore copy."""
-        database = self._database_path
-        if not database.is_file():
-            return None
-        current_schema = get_schema_version(database)
-        if current_schema <= target_schema:
-            return None
-
-        restore_copy = database.with_name(f".{database.name}.pre_rollback_restore")
-        restore_copy.unlink(missing_ok=True)
-        shutil.copy2(database, restore_copy)
-        try:
-            invariants = capture_invariants(database, max_schema=target_schema)
-            downgrade_database(
-                database,
-                target_schema=target_schema,
-                expected_invariants=invariants,
-            )
-            return restore_copy
-        except Exception as error:
-            try:
-                for suffix in ("-wal", "-shm"):
-                    Path(str(database) + suffix).unlink(missing_ok=True)
-                os.replace(restore_copy, database)
-            except OSError:
-                pass
-            raise UpdateError(
-                f"Не удалось подготовить базу данных для более старой версии (схема v{target_schema}): {error}"
-            ) from error
-
-    def _restore_live_database_after_failed_launch(self, restore_copy: Path | None) -> None:
-        if restore_copy is None or not restore_copy.is_file():
-            return
-        database = self._database_path
-        try:
-            for suffix in ("-wal", "-shm"):
-                Path(str(database) + suffix).unlink(missing_ok=True)
-            os.replace(restore_copy, database)
-        except OSError:
-            logger.exception("Не удалось вернуть исходную БД после отмены запуска updater")
-
     # ------------------------------------------------------------------
     # Google Drive public file transport
     # ------------------------------------------------------------------
     def _new_opener(self):
+        class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                validate_download_url(newurl)
+                return super().redirect_request(req, fp, code, msg, headers, newurl)
+
         jar = http.cookiejar.CookieJar()
-        return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        return urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(jar),
+            _SafeRedirectHandler(),
+        )
 
     def _request(self, opener, url: str, *, timeout: int, headers: dict[str, str] | None = None):
+        valid_url = validate_download_url(url)
         request_headers = {"User-Agent": _USER_AGENT, "Accept-Encoding": "identity"}
         if headers:
             request_headers.update(headers)
-        request = urllib.request.Request(url, headers=request_headers)
+        request = urllib.request.Request(valid_url, headers=request_headers)
         try:
-            return opener.open(request, timeout=timeout)
+            response = opener.open(request, timeout=timeout)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise UpdateNetworkError(
                 "Не удалось связаться с Google Drive. Программа продолжает работать; "
                 "проверка будет повторена позже."
             ) from error
+        final_url = response.geturl()
+        if final_url:
+            try:
+                validate_download_url(final_url)
+            except UpdateError as error:
+                response.close()
+                raise UpdateError(f"Перенаправление на небезопасный URL: {final_url}") from error
+        return response
 
     @staticmethod
     def _confirmation_url(html_text: str) -> str:
@@ -942,7 +952,10 @@ class UpdateService:
         form_parser = _DownloadFormParser()
         form_parser.feed(html_text)
         if form_parser.action:
-            parts = urllib.parse.urlsplit(unescape(form_parser.action))
+            action = unescape(form_parser.action)
+            if action.startswith("/"):
+                action = "https://drive.google.com" + action
+            parts = urllib.parse.urlsplit(action)
             params = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
             params.extend(form_parser.fields)
             query = urllib.parse.urlencode(params)
@@ -982,8 +995,9 @@ class UpdateService:
                     "Google Drive не разрешил прямое скачивание файла. "
                     "Проверьте доступ 'Все, у кого есть ссылка'."
                 )
-            url = next_url
+            url = validate_download_url(next_url)
         raise UpdateNotReady("Не удалось получить прямую ссылку скачивания Google Drive.")
+
 
     def _read_drive_file(self, file_id: str, max_bytes: int) -> bytes:
         _opener, response, _url = self._open_drive_binary(
@@ -1099,8 +1113,6 @@ class UpdateService:
         )
         response.close()
 
-        # Re-open the resolved binary URL with a byte range when a partial file
-        # exists. If Drive ignores Range, restart cleanly rather than append.
         headers: dict[str, str] = {}
         if start_size:
             headers["Range"] = f"bytes={start_size}-"
@@ -1110,7 +1122,8 @@ class UpdateService:
             timeout=UPDATE_DOWNLOAD_TIMEOUT_SECONDS,
             headers=headers,
         )
-        status = getattr(response, "status", response.getcode())
+
+        status = getattr(response, "status", getattr(response, "getcode", lambda: 200)())
         if start_size and status != 206:
             response.close()
             start_size = 0
@@ -1119,6 +1132,22 @@ class UpdateService:
                 opener,
                 resolved_url,
                 timeout=UPDATE_DOWNLOAD_TIMEOUT_SECONDS,
+            )
+
+        try:
+            headers_obj = getattr(response, "headers", None)
+            content_type = str(
+                headers_obj.get_content_type()
+                if headers_obj is not None and hasattr(headers_obj, "get_content_type")
+                else (headers_obj.get("Content-Type", "") if headers_obj is not None else "")
+            ).lower()
+        except Exception:
+            content_type = ""
+        if "text/html" in content_type or "application/xhtml" in content_type:
+            response.close()
+            temporary.unlink(missing_ok=True)
+            raise UpdateNetworkError(
+                "Сервер вернул HTML-страницу вместо пакета обновления. Повторите попытку позже."
             )
 
         mode = "ab" if start_size else "wb"
@@ -1141,6 +1170,11 @@ class UpdateService:
                         break
                     target.write(chunk)
                     done += len(chunk)
+                    if done > info.size_bytes:
+                        temporary.unlink(missing_ok=True)
+                        raise UpdateError(
+                            f"Размер скачиваемого пакета ({done} байт) превысил заявленный в манифесте лимит ({info.size_bytes} байт)."
+                        )
                     if progress is not None:
                         progress(done, info.size_bytes)
         finally:
@@ -1170,15 +1204,41 @@ class UpdateService:
     # ------------------------------------------------------------------
     # Installation hand-off
     # ------------------------------------------------------------------
-    def _prepare_bootstrap_updater(self, package: str | Path, info: UpdateInfo) -> Path:
-        """Extract the updater carried by the verified package into Windows TEMP.
+    def _prepare_bootstrap_updater(
+        self,
+        package: str | Path,
+        info: UpdateInfo,
+        *,
+        rollback: bool = False,
+    ) -> Path:
+        """Extract the updater into Windows TEMP.
 
-        The installer must not execute from the directory it is about to replace.
-        More importantly, using the updater embedded in *this* package prevents a
-        stale installed updater from carrying old UI/Win32 bugs into the next
-        release.  The public package hash is verified again before any executable
-        is extracted and launched.
+        For rollback transitions, prefer the currently installed updater if available,
+        since the current version contains the newest schema downgrade logic,
+        pre-update backups, and updater UI resilience. For forward updates, use the
+        updater carried inside the verified new package.
         """
+        if rollback:
+            installed_updater = self.paths.executable_dir / UPDATER_RELATIVE_PATH
+            if installed_updater.is_file() and installed_updater.stat().st_size > 0:
+                bootstrap_root = Path(tempfile.gettempdir()) / "DocumentRegistry" / "updater_bootstrap"
+                try:
+                    bootstrap_root.mkdir(parents=True, exist_ok=True)
+                    bootstrap_dir = Path(
+                        tempfile.mkdtemp(
+                            prefix=f"rollback_v{str(info.version).replace('.', '_')}_",
+                            dir=str(bootstrap_root),
+                        )
+                    )
+                    updater = bootstrap_dir / "DocumentRegistryUpdater.exe"
+                    shutil.copy2(installed_updater, updater)
+                    return updater
+                except OSError as error:
+                    logger.warning(
+                        "Не удалось скопировать установленный updater в TEMP (%s); используем updater из пакета",
+                        error,
+                    )
+
         package_path = Path(package).resolve(strict=False)
         if not package_path.is_file():
             raise UpdateError("Локальный пакет обновления не найден.")
@@ -1222,8 +1282,13 @@ class UpdateService:
                     )
                 )
                 updater = bootstrap_dir / "DocumentRegistryUpdater.exe"
+                extracted_bytes = 0
                 with archive.open(member_name, "r") as source, updater.open("wb") as target:
-                    shutil.copyfileobj(source, target, length=1024 * 1024)
+                    while chunk := source.read(65536):
+                        extracted_bytes += len(chunk)
+                        if extracted_bytes > MAX_BOOTSTRAP_UPDATER_BYTES:
+                            raise UpdateError("Некорректный размер updater в пакете обновления.")
+                        target.write(chunk)
             except OSError as error:
                 raise UpdateError(
                     f"Не удалось подготовить временный модуль обновления: {error}"
@@ -1271,23 +1336,25 @@ class UpdateService:
         if not executable.is_file():
             raise UpdateError(f"Не найден основной исполняемый файл: {executable}")
 
-        # Always launch the updater embedded in the verified package from a TEMP
-        # directory.
-        updater = self._prepare_bootstrap_updater(package, info)
+        # Always launch the updater from a TEMP directory.
+        updater = self._prepare_bootstrap_updater(package, info, rollback=rollback)
 
-        restore_copy: Path | None = None
         if rollback:
             # Ensure the current database is backed up to backups/rollback/ (unless
-            # already saved by UpdateController) and, if its schema is newer than
-            # the rollback target, downgraded so even a legacy updater/executable
-            # inside an older package can validate it.
+            # already saved by UpdateController). The live database remains intact
+            # at current schema; candidate database downgrade is performed safely
+            # in staging by the standalone updater process after the main application exits.
             if pre_saved_backup is None:
+                try:
+                    comparison = self.check_database_compatibility(info, current_version)
+                except Exception:
+                    comparison = None
                 self.save_database_before_rollback(
                     current_version=current_version or "current",
                     target_version=info.version,
                     target_schema=info.database_schema,
+                    comparison=comparison,
                 )
-            restore_copy = self._downgrade_live_database_for_rollback(info.database_schema)
 
         command = [
             str(updater),
@@ -1304,6 +1371,8 @@ class UpdateService:
             "--pid",
             str(os.getpid()),
         ]
+        if rollback:
+            command.append("--rollback")
         # A stale terminal status from the previous update must not satisfy the
         # visibility handshake for this new installer process. Durable history is
         # stored separately, so removing this one-shot status file is safe.
@@ -1312,12 +1381,8 @@ class UpdateService:
         except OSError:
             logger.debug("Не удалось очистить предыдущий update_status.json", exc_info=True)
         try:
-            process = subprocess.Popen(command, cwd=updater.parent)
-            if restore_copy is not None:
-                restore_copy.unlink(missing_ok=True)
-            return process
+            return subprocess.Popen(command, cwd=updater.parent)
         except OSError as error:
-            self._restore_live_database_after_failed_launch(restore_copy)
             raise UpdateError(f"Не удалось запустить модуль обновления: {error}") from error
 
     def wait_for_updater_window(

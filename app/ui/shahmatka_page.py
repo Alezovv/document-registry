@@ -4,10 +4,35 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QFileDialog, QMessageBox,
     QFormLayout
 )
-from PySide6.QtCore import Qt
-from openpyxl import Workbook
-from openpyxl.styles import Border, Side, Alignment
-from openpyxl.worksheet.pagebreak import Break
+from PySide6.QtCore import QThread, Qt, Signal
+from app.shahmatka_service import generate_shahmatka_xlsx
+
+
+class ShahmatkaWorker(QThread):
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, start_num: int, max_num: int, rows: int, file_path: str):
+        super().__init__()
+        self.start_num = int(start_num)
+        self.max_num = int(max_num)
+        self.rows = max(1, int(rows))
+        self.file_path = str(file_path)
+
+    def run(self):
+        try:
+            self.setPriority(QThread.Priority.LowPriority)
+        except Exception:
+            pass
+        try:
+            generate_shahmatka_xlsx(
+                self.start_num, self.max_num, self.rows, self.file_path
+            )
+        except Exception as error:
+            self.failed.emit(str(error))
+        else:
+            self.succeeded.emit(self.file_path)
+
 
 class NumberInput(QWidget):
     def __init__(self, value, min_val, max_val, parent=None):
@@ -94,6 +119,7 @@ class NumberInput(QWidget):
 class ShahmatkaPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._generation_worker: ShahmatkaWorker | None = None
         self._build_ui()
 
     def _build_ui(self):
@@ -171,62 +197,33 @@ class ShahmatkaPage(QWidget):
         if not file_path:
             return
 
+        if self._generation_worker is not None and self._generation_worker.isRunning():
+            return
+
+        self.generate_btn.setEnabled(False)
+        self.generate_btn.setText("Формирование…")
+        worker = ShahmatkaWorker(start_num, max_num, rows, file_path)
+        self._generation_worker = worker
+        worker.succeeded.connect(self._on_generation_succeeded)
+        worker.failed.connect(self._on_generation_failed)
+        worker.finished.connect(self._on_generation_finished)
+        worker.start(QThread.Priority.LowPriority)
+
+    def _on_generation_succeeded(self, file_path: str):
+        QMessageBox.information(self, "Успех", f"Файл успешно сохранен:\n{file_path}")
         try:
-            total_nums = max_num - start_num + 1
-            cols = (total_nums + rows - 1) // rows
+            if os.name == "nt":
+                os.startfile(os.path.dirname(file_path))
+        except Exception:
+            pass
 
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Шахматка"
+    def _on_generation_failed(self, message: str):
+        QMessageBox.critical(self, "Ошибка", f"Не удалось создать файл:\n{message}")
 
-            ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
-            ws.page_setup.paperSize = ws.PAPERSIZE_A4
-
-            ws.page_margins.left = 0.5
-            ws.page_margins.right = 0.5
-            ws.page_margins.top = 0.5
-            ws.page_margins.bottom = 0.5
-
-            thin_border = Border(left=Side(style='thin'), 
-                                 right=Side(style='thin'), 
-                                 top=Side(style='thin'), 
-                                 bottom=Side(style='thin'))
-
-            for r in range(rows):
-                for c in range(cols):
-                    val = start_num + c * rows + r
-                    
-                    num_cell = ws.cell(row=r+1, column=c*2+1)
-                    empty_cell = ws.cell(row=r+1, column=c*2+2)
-                    
-                    if val <= max_num:
-                        num_cell.value = val
-                        
-                    num_cell.border = thin_border
-                    num_cell.alignment = Alignment(horizontal='center', vertical='center')
-                    
-                    empty_cell.border = thin_border
-                    empty_cell.alignment = Alignment(horizontal='center', vertical='center')
-
-            for c in range(cols):
-                col_num_letter = ws.cell(row=1, column=c*2+1).column_letter
-                col_empty_letter = ws.cell(row=1, column=c*2+2).column_letter
-                
-                ws.column_dimensions[col_num_letter].width = 8
-                ws.column_dimensions[col_empty_letter].width = 12 
-                
-                if (c + 1) % 6 == 0 and c != cols - 1:
-                    ws.col_breaks.append(Break(id=(c*2+2)))
-
-            wb.save(file_path)
-            QMessageBox.information(self, "Успех", f"Файл успешно сохранен:\n{file_path}")
-            
-            # Try to open the directory
-            try:
-                if os.name == 'nt':
-                    os.startfile(os.path.dirname(file_path))
-            except Exception:
-                pass
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось создать файл:\n{str(e)}")
+    def _on_generation_finished(self):
+        worker = self._generation_worker
+        self._generation_worker = None
+        self.generate_btn.setEnabled(True)
+        self.generate_btn.setText("Сгенерировать Excel")
+        if worker is not None:
+            worker.deleteLater()

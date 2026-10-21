@@ -59,6 +59,8 @@ for dep_name in sorted(installed_dist_names & paddlex_dep_names):
 main_binaries = collect_dynamic_libs("paddle")
 
 main_hiddenimports = ["onnxruntime"]
+if (ROOT / "app" / "update_config_local.py").is_file():
+    main_hiddenimports.append("app.update_config_local")
 main_hiddenimports += collect_submodules("paddleocr._pipelines")
 main_hiddenimports += collect_submodules("paddlex.inference")
 

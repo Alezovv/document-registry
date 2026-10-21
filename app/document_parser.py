@@ -179,23 +179,23 @@ class DocumentParser(
                 if by1 > page_h * 0.45:
                     continue
                 bt = str(b.get("text", "")).strip()
-                if re.search(r"(?i)\b(?:вх\.?|входящ\w*|исх\.?|исходящ\w*|№|номер)\b", bt):
+                # Filter out false anchors where '№' belongs to an institution/org name
+                bt_no_org = re.sub(
+                    r"(?i)\b(?:кбсмп|больниц\w*|поликлиник\w*|детск\w+\s+сад\w*|сад\w*|школ\w*|гимнази\w*|лице[йя]\w*|отдел\w*\s+полици\w*|оп|овд|военкомат\w*|часть|в/ч|судебн\w+\s+участ\w*)\s*№\s*\d+",
+                    "",
+                    bt,
+                )
+                if re.search(r"(?i)\b(?:вх\.?|входящ\w*|исх\.?|исходящ\w*|№|номер)\b", bt_no_org):
                     anchor_stamp = b
                     break
 
             if anchor_stamp:
-                ax1 = float(anchor_stamp.get("x1", 0))
-                ay1 = float(anchor_stamp.get("y1", 0))
-                ax2 = float(anchor_stamp.get("x2", ax1))
-                ay2 = float(anchor_stamp.get("y2", ay1))
-                if ax1 < page_w * 0.5:
-                    nx0 = 0.0
-                    nx1 = min(1.0, max(0.68, (ax2 + 250.0) / page_w))
-                else:
-                    nx0 = max(0.0, min(0.35, (ax1 - 250.0) / page_w))
-                    nx1 = 1.0
-                ny0 = max(0.0, (ay1 - 80.0) / page_h)
-                ny1 = min(0.48, (ay2 + 250.0) / page_h)
+                ay2 = float(anchor_stamp.get("y2", anchor_stamp.get("y1", 0)))
+                # Always use full width (0.0..1.0) so left-side angular stamps are never excluded
+                nx0 = 0.0
+                nx1 = 1.0
+                ny0 = 0.0
+                ny1 = min(0.48, max(0.42, (ay2 + 250.0) / page_h))
                 regions.append({
                     "field": "incoming_stamp",
                     "norm_rect": (nx0, ny0, nx1, ny1),

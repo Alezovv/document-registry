@@ -53,6 +53,8 @@ class OcrDiagnosticsController(QObject):
 
     def _on_completed(self, ok: bool, details: str) -> None:
         parent = self.parent()
+        if parent is None or getattr(parent, "_is_closing", False):
+            return
         if ok:
             self.toast("OCR", "OCR работает: PaddleOCR и модели успешно инициализированы.", "success")
             QMessageBox.information(

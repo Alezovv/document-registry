@@ -652,18 +652,25 @@ class NormalizationMixin:
             result[k] = re.sub(r"\s+", " ", v).strip()
         dept = result.get("from_department", "")
         if re.search(r"(?i)(?:кбсмп|бсмп|больниц\w*[^.\n]{0,60}?15|кб\s*№?\s*15)", dept):
+            is_canonical_fingerprint = bool(
+                re.search(r"(?i)\bгосударственн\w+\s+учреждени\w+\s+здравоохранени\w+.*больниц\w*.*15", dept)
+            )
             dept_cleaned = re.sub(
                 r"(?i)\s*(?:государственн\w+\s+учреждени\w+.*|г[уа]з\s+.*|(?:«|\")?(?:клиническ\w+\s+)?(?:больниц\w*|кбсмп|бсмп)\s*.*15.*)",
                 "",
                 dept,
             ).strip(" .,:;-")
             if (
-                len(dept_cleaned) < 4
-                or re.match(r"^\d+[.\s]+(?:[A-Za-zА-Яа-яЁё]\s+)?\d{4}\b", dept_cleaned)
-                or dept_cleaned.lower() in {"гуз", "гбуз", "гауз", "больница", "кбсмп", "бсмп"}
+                len(dept_cleaned) >= 4
+                and not re.match(r"^\d+[.\s]+(?:[A-Za-zА-Яа-яЁё]\s+)?\d{4}\b", dept_cleaned)
+                and dept_cleaned.lower() not in {"гуз", "гбуз", "гауз", "больница", "кбсмп", "бсмп"}
             ):
-                dept_cleaned = ""
-            result["from_department"] = dept_cleaned
+                result["from_department"] = dept_cleaned
+            elif is_canonical_fingerprint:
+                # Authentic outgoing or internal document originating from the hospital itself
+                result["from_department"] = dept
+            else:
+                result["from_department"] = ""
         target_person = result.get("to_person", "")
         if target_person:
             result["to_person"] = self._normalize_target_name(target_person)

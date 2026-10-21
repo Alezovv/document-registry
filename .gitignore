@@ -1,53 +1,98 @@
-# Python
+# ==============================================================================
+# Python & Caches
+# ==============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 coverage.xml
 htmlcov/
+
+# ==============================================================================
+# Internal Tests & Development Tools (not for public repo)
+# ==============================================================================
 /tests/
-# Virtual environments
+tests/
+test_.py
+/tools/
+tools/
+
+# ==============================================================================
+# Virtual Environments
+# ==============================================================================
 .venv/
 venv/
 env/
 ENV/
 
-# PyInstaller / build output
+# ==============================================================================
+# PyInstaller / Build Artifacts
+# ==============================================================================
 build/
 dist/
 release/
-/tools/
-# Runtime application data
-/gold/
+
+# ==============================================================================
+# Databases & Runtime Application Data (Confidential / Sensitive)
+# ==============================================================================
+data/
 /data/
+gold/
+/gold/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
 
-#data/*.db
-#data/*.db-shm
-#data/*.db-wal
-#data/*.sqlite
-#data/*.sqlite3
-#data/documents/
-#data/parser_cache/
-#data/paddle_cache/
-#data/updates/
-#data/parser_corrections.json
+# Documents, scans and exports (confidential personal / case data)
+*.pdf
+*.docx
+*.doc
+*.rtf
+*.xlsx
+*.csv
+*.tif
+*.tiff
+*_highlighted.pdf
+*_preview.pdf
 
-# Backups / logs / diagnostics
+# Parser user corrections & model caches
+parser_corrections.json
+parser_cache/
+paddle_cache/
+
+# ==============================================================================
+# Backups, Logs & Diagnostics
+# ==============================================================================
 backups/
 backup/
 logs/
 diagnostics/
+crashes/
 *.log
+*.dmp
 
-# Temporary/update staging
+# ==============================================================================
+# Temporary Files & Update Staging
+# ==============================================================================
 .tmp/
 tmp/
 temp/
+update/
+updates/
+update_temp/
 .update_staging/
 .update_rollback/
+manifest.json
+*.update
+*.sig
 *.tmp
 *.temp
 *.bak
@@ -55,16 +100,40 @@ temp/
 *.orig
 *.uploading
 
-# Secrets / signing material (future signed updater)
+# ==============================================================================
+# Local Reports, Audit Logs & Patch Notes
+# ==============================================================================
+*REPORT*.md
+*report*.md
+*patch*.txt
+
+# ==============================================================================
+# AI Assistants & Agent Tooling Metadata
+# ==============================================================================
+.agents/
+.serena/
+.gemini/
+.claude/
+.cursor/
+
+# ==============================================================================
+# Secrets & Credentials
+# ==============================================================================
+app/update_config_local.py
+update_config_local.py
 *.key
 *.pem
 *.p12
 *.pfx
+*.crt
+*.cer
 .env
 .env.*
 !.env.example
 
-# IDE / OS
+# ==============================================================================
+# IDE & Operating System Files
+# ==============================================================================
 .vscode/
 .idea/
 *.code-workspace
@@ -73,12 +142,18 @@ Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
 
-# Local release archives
+# ==============================================================================
+# Archives & Packages
+# ==============================================================================
 *.zip
 *.7z
 *.rar
+*.tar
+*.gz
 
-# Benchmarks and local test datasets
+# ==============================================================================
+# Benchmarks & Datasets
+# ==============================================================================
 benchmarks/
 benchmark_*.json
 dataset/

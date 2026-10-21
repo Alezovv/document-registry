@@ -147,7 +147,17 @@ class LegacyImportController:
         self.worker.finished.connect(self._finished)
         self.worker.start(QThread.Priority.LowPriority)
 
+    def stop(self) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(2000)
+        if self.progress is not None:
+            self.progress.close()
+            self.progress = None
+
     def _success(self, result):
+        if self.parent is not None and getattr(self.parent, "_is_closing", False):
+            return
         if callable(self.on_success):
             self.on_success()
         message = (
@@ -159,6 +169,8 @@ class LegacyImportController:
         QMessageBox.information(self.parent, "Перенос завершён", message)
 
     def _failure(self, message: str):
+        if self.parent is not None and getattr(self.parent, "_is_closing", False):
+            return
         QMessageBox.critical(self.parent, "Ошибка переноса", message)
 
     def _finished(self):

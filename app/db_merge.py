@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from contextlib import closing
+from datetime import datetime, timezone
+import json
 import logging
 from pathlib import Path
 import shutil
@@ -38,6 +41,8 @@ class MergeConflict:
     rollback_id: int
     diffs: list[FieldDiff]
     resolution: Optional[MergeStrategy] = None
+    current_record: dict = field(default_factory=dict)
+    rollback_record: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -91,6 +96,18 @@ class MergeResult:
     skipped_count: int = 0
     conflict_resolved: int = 0
     errors: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if self.errors:
+            self.success = False
+
+    @property
+    def is_partial(self) -> bool:
+        return bool(self.errors and (self.imported_count > 0 or self.conflict_resolved > 0))
+
+    @property
+    def is_full_success(self) -> bool:
+        return self.success and not self.errors
 
     @property
     def summary(self) -> str:
@@ -150,6 +167,21 @@ class DatabaseMergeService:
     # ── Бизнес-ключ записи ────────────────────────────────────
 
     @staticmethod
+    def _normalize_timestamp(value: object) -> str:
+        """Нормализовать временную метку к единому формату UTC для корректного сравнения."""
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        iso_candidate = raw.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(iso_candidate)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            return raw.replace("T", " ")
+
+    @staticmethod
     def _business_key(record: dict) -> tuple:
         """
         Вычислить бизнес-ключ записи:
@@ -205,38 +237,49 @@ class DatabaseMergeService:
         analysis.current_total = len(current_records)
         analysis.rollback_total = len(rollback_records)
 
-        current_index = {self._business_key(r): r for r in current_records}
-        rollback_index = {self._business_key(r): r for r in rollback_records}
+        current_grouped: dict[tuple, list[dict]] = {}
+        for r in current_records:
+            current_grouped.setdefault(self._business_key(r), []).append(r)
 
-        current_keys = set(current_index.keys())
-        rollback_keys = set(rollback_index.keys())
+        rollback_grouped: dict[tuple, list[dict]] = {}
+        for r in rollback_records:
+            rollback_grouped.setdefault(self._business_key(r), []).append(r)
 
-        # Записи только в текущей БД (сохранены после отката)
-        for key in current_keys - rollback_keys:
-            analysis.only_in_current.append(current_index[key])
+        all_keys = list(dict.fromkeys(list(current_grouped.keys()) + list(rollback_grouped.keys())))
 
-        # Записи только в rollback БД (подлежат импорту)
-        for key in rollback_keys - current_keys:
-            analysis.only_in_rollback.append(rollback_index[key])
+        for key in all_keys:
+            cur_list = current_grouped.get(key, [])
+            rb_list = rollback_grouped.get(key, [])
 
-        # Записи, присутствующие в обеих базах
-        for key in current_keys & rollback_keys:
-            cur_rec = current_index[key]
-            rb_rec = rollback_index[key]
-            diffs = self._compare_records(cur_rec, rb_rec)
+            # Попарно сопоставляем записи с одинаковым бизнес-ключом
+            min_len = min(len(cur_list), len(rb_list))
+            for i in range(min_len):
+                cur_rec = cur_list[i]
+                rb_rec = rb_list[i]
+                diffs = self._compare_records(cur_rec, rb_rec)
 
-            if diffs:
-                analysis.conflicts.append(
-                    MergeConflict(
-                        business_key=key,
-                        display_label=self._format_record_label(cur_rec),
-                        current_id=cur_rec["id"],
-                        rollback_id=rb_rec["id"],
-                        diffs=diffs,
+                if diffs:
+                    analysis.conflicts.append(
+                        MergeConflict(
+                            business_key=key,
+                            display_label=self._format_record_label(cur_rec),
+                            current_id=cur_rec["id"],
+                            rollback_id=rb_rec["id"],
+                            diffs=diffs,
+                            current_record=cur_rec,
+                            rollback_record=rb_rec,
+                        )
                     )
-                )
-            else:
-                analysis.identical_count += 1
+                else:
+                    analysis.identical_count += 1
+
+            # Избыточные записи в rollback БД (подлежат импорту)
+            for i in range(min_len, len(rb_list)):
+                analysis.only_in_rollback.append(rb_list[i])
+
+            # Избыточные записи в текущей БД (сохранены после отката)
+            for i in range(min_len, len(cur_list)):
+                analysis.only_in_current.append(cur_list[i])
 
         logger.info(
             "Merge analysis: current=%d, rollback=%d, only_current=%d, "
@@ -273,20 +316,28 @@ class DatabaseMergeService:
         # 1. Защитный бэкап рабочей БД
         self._create_pre_merge_backup(backup_service)
 
-        conn = sqlite3.connect(str(self.current_db_path))
+        conn = sqlite3.connect(str(self.current_db_path), timeout=10.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 10000")
 
         rollback_conn = sqlite3.connect(str(analysis.rollback_db_path))
         rollback_conn.row_factory = sqlite3.Row
         rollback_conn.execute("PRAGMA query_only = ON")
 
         reserved_names: set[str] = set()
+        # Keep track of PDFs created by this merge so failed items (and a failed
+        # outer transaction) cannot leave orphaned files in the live documents dir.
+        self._merge_created_files: list[Path] = []
 
         try:
             conn.execute("BEGIN IMMEDIATE")
 
             # 2. Добавление записей, существующих только в сохранённой копии
-            for record in analysis.only_in_rollback:
+            for index, record in enumerate(analysis.only_in_rollback):
+                savepoint = f"merge_import_{index}"
+                created_before = len(self._merge_created_files)
+                conn.execute(f"SAVEPOINT {savepoint}")
                 try:
                     self._import_record(
                         conn,
@@ -295,15 +346,29 @@ class DatabaseMergeService:
                         analysis.rollback_db_path,
                         reserved_names,
                     )
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                     result.imported_count += 1
                 except Exception as e:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    self._cleanup_merge_files(created_before, reserved_names)
                     label = self._format_record_label(record)
                     result.errors.append(f"Ошибка импорта {label}: {e}")
                     logger.exception("Import error for %s", label)
 
             # 3. Разрешение конфликтующих записей
-            for conflict in analysis.conflicts:
-                res = (conflict_resolutions or {}).get(conflict.business_key, strategy)
+            for index, conflict in enumerate(analysis.conflicts):
+                savepoint = f"merge_conflict_{index}"
+                created_before = len(self._merge_created_files)
+                conn.execute(f"SAVEPOINT {savepoint}")
+                res = strategy
+                if conflict_resolutions:
+                    if (conflict.current_id, conflict.rollback_id) in conflict_resolutions:
+                        res = conflict_resolutions[(conflict.current_id, conflict.rollback_id)]
+                    elif conflict.current_id in conflict_resolutions:
+                        res = conflict_resolutions[conflict.current_id]
+                    elif conflict.business_key in conflict_resolutions:
+                        res = conflict_resolutions[conflict.business_key]
                 try:
                     self._resolve_conflict(
                         conn,
@@ -313,23 +378,35 @@ class DatabaseMergeService:
                         analysis.rollback_db_path,
                         reserved_names,
                     )
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                     result.conflict_resolved += 1
                 except Exception as e:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    self._cleanup_merge_files(created_before, reserved_names)
                     result.errors.append(
                         f"Ошибка разрешения конфликта {conflict.display_label}: {e}"
                     )
                     logger.exception("Conflict resolution error for %s", conflict.display_label)
 
             conn.commit()
+            if result.errors:
+                result.success = False
+            else:
+                result.success = True
 
         except Exception as e:
             conn.rollback()
+            self._cleanup_merge_files(0, reserved_names)
+            result.imported_count = 0
+            result.conflict_resolved = 0
             result.success = False
             result.errors.append(f"Критическая ошибка слияния (транзакция откатана): {e}")
             logger.exception("Merge failed, rolled back")
         finally:
             rollback_conn.close()
             conn.close()
+            self._merge_created_files = []
 
         return result
 
@@ -388,25 +465,31 @@ class DatabaseMergeService:
             ]
             for c in token_candidates:
                 try:
-                    if c.is_file():
+                    if c.is_file() and c.suffix.lower() == ".pdf":
                         return c.resolve()
                 except OSError:
                     continue
 
-        # Ищем относительно rollback_db и documents
+        # Ищем относительно rollback_db и documents (блокируем выход за пределы через .. и не-PDF)
         raw = Path(text)
-        candidates = [
-            raw,
-            rollback_db_path.parent / raw,
-            rollback_db_path.parent / raw.name,
-            rollback_db_path.parent / "documents" / raw.name,
-            rollback_db_path.parent / "data" / "documents" / raw.name,
-            rollback_db_path.parent.parent / raw.name,
-            self.documents_dir / raw.name,
-        ]
+        has_traversal = ".." in raw.parts
+        candidates: list[Path] = []
+        if not has_traversal:
+            candidates.extend([
+                raw,
+                rollback_db_path.parent / raw,
+            ])
+        if raw.name:
+            candidates.extend([
+                rollback_db_path.parent / raw.name,
+                rollback_db_path.parent / "documents" / raw.name,
+                rollback_db_path.parent / "data" / "documents" / raw.name,
+                rollback_db_path.parent.parent / raw.name,
+                self.documents_dir / raw.name,
+            ])
         for candidate in candidates:
             try:
-                if candidate.is_file():
+                if candidate.is_file() and candidate.suffix.lower() == ".pdf":
                     return candidate.resolve()
             except OSError:
                 continue
@@ -423,9 +506,25 @@ class DatabaseMergeService:
         dest_path = self.documents_dir / dest_name
 
         if source_file.resolve() != dest_path.resolve():
+            created_files = getattr(self, "_merge_created_files", None)
+            if created_files is not None:
+                # Register before copying so a partially written destination is
+                # also removed if copy2 raises midway through the operation.
+                created_files.append(dest_path)
             shutil.copy2(source_file, dest_path)
 
         return encode_runtime_path(dest_path, self.runtime_root)
+
+    def _cleanup_merge_files(self, start_index: int, reserved_names: set[str]) -> None:
+        """Remove files created by failed merge items and release their names."""
+        created_files = getattr(self, "_merge_created_files", [])
+        for path in reversed(created_files[start_index:]):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Не удалось удалить PDF после отката слияния: %s", path)
+            reserved_names.discard(path.name.casefold())
+        del created_files[start_index:]
 
     @staticmethod
     def _unique_name(directory: Path, name: str, reserved: set[str]) -> str:
@@ -481,10 +580,21 @@ class DatabaseMergeService:
         ]
         values = []
         for c in cols:
+            val = record.get(c)
             if c == "source_document":
-                values.append(new_source_doc)
+                values.append(new_source_doc or "")
+            elif c == "is_pinned":
+                values.append(int(val or 0))
+            elif c == "source_size_bytes":
+                values.append(int(val or 0))
+            elif c == "source_sha256":
+                values.append(str(val or ""))
+            elif c == "received_date":
+                values.append(str(val or record.get("created_at") or datetime.now().strftime("%d.%m.%Y")))
+            elif c == "status":
+                values.append(str(val or "Новый"))
             else:
-                values.append(record.get(c, ""))
+                values.append(str(val or ""))
 
         placeholders = ", ".join(["?"] * len(cols))
         cur = conn.execute(
@@ -493,17 +603,42 @@ class DatabaseMergeService:
         )
         new_id = cur.lastrowid
 
-        # Перенос истории изменений
-        hist_rows = rollback_conn.execute(
-            "SELECT action, description, created_at, snapshot FROM request_history WHERE request_id = ? ORDER BY id",
-            (old_id,),
-        ).fetchall()
-        for h in hist_rows:
-            conn.execute(
-                "INSERT INTO request_history (request_id, action, description, created_at, snapshot) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (new_id, h["action"], h["description"], h["created_at"], h["snapshot"]),
-            )
+        rollback_tables = {
+            row[0]
+            for row in rollback_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+
+        # Перенос истории изменений с проверкой наличия таблицы и колонки snapshot
+        if "request_history" in rollback_tables:
+            hist_columns = {
+                row[1]
+                for row in rollback_conn.execute("PRAGMA table_info(request_history)").fetchall()
+            }
+            if "snapshot" in hist_columns:
+                hist_sql = "SELECT action, description, created_at, snapshot FROM request_history WHERE request_id = ? ORDER BY id"
+            else:
+                hist_sql = "SELECT action, description, created_at, NULL as snapshot FROM request_history WHERE request_id = ? ORDER BY id"
+
+            hist_rows = rollback_conn.execute(hist_sql, (old_id,)).fetchall()
+            for h in hist_rows:
+                raw_snap = h["snapshot"]
+                updated_snap = raw_snap
+                if raw_snap:
+                    try:
+                        parsed = json.loads(raw_snap)
+                        if isinstance(parsed, dict) and "id" in parsed:
+                            parsed["id"] = new_id
+                            if new_source_doc and parsed.get("source_document"):
+                                parsed["source_document"] = new_source_doc
+                            updated_snap = json.dumps(parsed, ensure_ascii=False)
+                    except Exception:
+                        pass
+
+                conn.execute(
+                    "INSERT INTO request_history (request_id, action, description, created_at, snapshot) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (new_id, h["action"], h["description"], h["created_at"], updated_snap),
+                )
 
         conn.execute(
             "INSERT INTO request_history (request_id, action, description, created_at) "
@@ -512,28 +647,64 @@ class DatabaseMergeService:
         )
 
         # Перенос OCR-текста
-        ocr_row = rollback_conn.execute(
-            "SELECT ocr_text FROM request_search_content WHERE request_id = ?",
-            (old_id,),
-        ).fetchone()
-        if ocr_row and ocr_row["ocr_text"]:
-            conn.execute(
-                "INSERT OR REPLACE INTO request_search_content (request_id, ocr_text, indexed_at) "
-                "VALUES (?, ?, CURRENT_TIMESTAMP)",
-                (new_id, ocr_row["ocr_text"]),
-            )
+        if "request_search_content" in rollback_tables:
+            ocr_row = rollback_conn.execute(
+                "SELECT ocr_text FROM request_search_content WHERE request_id = ?",
+                (old_id,),
+            ).fetchone()
+            if ocr_row and ocr_row["ocr_text"]:
+                conn.execute(
+                    "INSERT OR REPLACE INTO request_search_content (request_id, ocr_text, indexed_at) "
+                    "VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    (new_id, ocr_row["ocr_text"]),
+                )
 
         # Перенос метаданных парсера
-        meta_row = rollback_conn.execute(
-            "SELECT parser_version, diagnostics_json FROM request_parser_metadata WHERE request_id = ?",
-            (old_id,),
-        ).fetchone()
-        if meta_row:
-            conn.execute(
-                "INSERT OR REPLACE INTO request_parser_metadata (request_id, parser_version, diagnostics_json, updated_at) "
-                "VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-                (new_id, meta_row["parser_version"], meta_row["diagnostics_json"]),
-            )
+        if "request_parser_metadata" in rollback_tables:
+            meta_row = rollback_conn.execute(
+                "SELECT parser_version, diagnostics_json FROM request_parser_metadata WHERE request_id = ?",
+                (old_id,),
+            ).fetchone()
+            if meta_row:
+                conn.execute(
+                    "INSERT OR REPLACE INTO request_parser_metadata (request_id, parser_version, diagnostics_json, updated_at) "
+                    "VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                    (new_id, meta_row["parser_version"], meta_row["diagnostics_json"]),
+                )
+
+        # Перенос связей с делами (cases / case_requests)
+        current_tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        if {"cases", "case_requests"}.issubset(rollback_tables) and {"cases", "case_requests"}.issubset(current_tables):
+            case_rows = rollback_conn.execute(
+                "SELECT c.title, c.note, c.created_at, c.updated_at, cr.added_at "
+                "FROM case_requests cr JOIN cases c ON c.id = cr.case_id "
+                "WHERE cr.request_id = ? ORDER BY c.id",
+                (old_id,),
+            ).fetchall()
+            for c_row in case_rows:
+                title = str(c_row["title"] or "").strip()
+                if not title:
+                    continue
+                existing_case = conn.execute(
+                    "SELECT id FROM cases WHERE title = ? LIMIT 1", (title,)
+                ).fetchone()
+                if existing_case:
+                    target_case_id = int(existing_case["id"])
+                else:
+                    cur_case = conn.execute(
+                        "INSERT INTO cases (title, note, created_at, updated_at) "
+                        "VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))",
+                        (title, str(c_row["note"] or ""), c_row["created_at"], c_row["updated_at"]),
+                    )
+                    target_case_id = int(cur_case.lastrowid)
+                conn.execute(
+                    "INSERT OR IGNORE INTO case_requests (case_id, request_id, added_at) "
+                    "VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))",
+                    (target_case_id, new_id, c_row["added_at"]),
+                )
 
         return new_id
 
@@ -564,8 +735,8 @@ class DatabaseMergeService:
         if strategy == MergeStrategy.KEEP_ROLLBACK:
             should_apply_rollback = True
         elif strategy == MergeStrategy.KEEP_NEWER:
-            cur_updated = str(cur_rec["updated_at"] or cur_rec["created_at"] or "")
-            rb_updated = str(rb_rec["updated_at"] or rb_rec["created_at"] or "")
+            cur_updated = self._normalize_timestamp(cur_rec["updated_at"] or cur_rec["created_at"])
+            rb_updated = self._normalize_timestamp(rb_rec["updated_at"] or rb_rec["created_at"])
             if rb_updated > cur_updated:
                 should_apply_rollback = True
 
@@ -593,21 +764,83 @@ class DatabaseMergeService:
                 "source_size_bytes",
             ]
             set_clause = ", ".join([f"{c} = ?" for c in cols]) + ", updated_at = CURRENT_TIMESTAMP"
+            rb_keys = set(rb_rec.keys())
             vals = []
             for c in cols:
+                val = rb_rec[c] if c in rb_keys else None
                 if c == "source_document":
-                    vals.append(new_source_doc)
+                    vals.append(new_source_doc or "")
+                elif c == "is_pinned":
+                    vals.append(int(val or 0))
+                elif c == "source_size_bytes":
+                    vals.append(int(val or 0))
+                elif c == "source_sha256":
+                    vals.append(str(val or ""))
+                elif c == "received_date":
+                    vals.append(str(val or cur_rec["received_date"] or datetime.now().strftime("%d.%m.%Y")))
+                elif c == "status":
+                    vals.append(str(val or "Новый"))
                 else:
-                    vals.append(rb_rec[c])
+                    vals.append(str(val or ""))
             vals.append(conflict.current_id)
 
             conn.execute(f"UPDATE requests SET {set_clause} WHERE id = ?", vals)
 
+            cur_snap_json = json.dumps(dict(cur_rec), ensure_ascii=False) if cur_rec else None
             conn.execute(
-                "INSERT INTO request_history (request_id, action, description, created_at) "
-                "VALUES (?, 'conflict_resolved', ?, CURRENT_TIMESTAMP)",
-                (conflict.current_id, f"Конфликт разрешён в пользу версии отката ({strategy.value})"),
+                "INSERT INTO request_history (request_id, action, description, snapshot, created_at) "
+                "VALUES (?, 'conflict_resolved', ?, ?, CURRENT_TIMESTAMP)",
+                (conflict.current_id, f"Конфликт разрешён в пользу версии отката ({strategy.value})", cur_snap_json),
             )
+
+            rollback_tables = {
+                row[0]
+                for row in rollback_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            }
+
+            current_tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            }
+            ocr_row = (
+                rollback_conn.execute(
+                    "SELECT ocr_text FROM request_search_content WHERE request_id = ?",
+                    (conflict.rollback_id,),
+                ).fetchone()
+                if "request_search_content" in rollback_tables
+                else None
+            )
+            if ocr_row and ocr_row["ocr_text"]:
+                conn.execute(
+                    "INSERT OR REPLACE INTO request_search_content (request_id, ocr_text, indexed_at) "
+                    "VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    (conflict.current_id, ocr_row["ocr_text"]),
+                )
+            elif "request_search_content" in current_tables:
+                conn.execute(
+                    "DELETE FROM request_search_content WHERE request_id = ?",
+                    (conflict.current_id,),
+                )
+
+            meta_row = (
+                rollback_conn.execute(
+                    "SELECT parser_version, diagnostics_json FROM request_parser_metadata WHERE request_id = ?",
+                    (conflict.rollback_id,),
+                ).fetchone()
+                if "request_parser_metadata" in rollback_tables
+                else None
+            )
+            if meta_row:
+                conn.execute(
+                    "INSERT OR REPLACE INTO request_parser_metadata (request_id, parser_version, diagnostics_json, updated_at) "
+                    "VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                    (conflict.current_id, meta_row["parser_version"], meta_row["diagnostics_json"]),
+                )
+            elif "request_parser_metadata" in current_tables:
+                conn.execute(
+                    "DELETE FROM request_parser_metadata WHERE request_id = ?",
+                    (conflict.current_id,),
+                )
 
     def _create_pre_merge_backup(self, backup_service):
         """Создать защитную копию рабочей БД перед операцией слияния."""
@@ -621,4 +854,13 @@ class DatabaseMergeService:
         backup_file = self.current_db_path.with_name(
             f"{self.current_db_path.stem}.pre_merge_backup{self.current_db_path.suffix}"
         )
-        shutil.copy2(self.current_db_path, backup_file)
+        try:
+            with closing(sqlite3.connect(str(self.current_db_path), timeout=30.0)) as src, closing(sqlite3.connect(str(backup_file))) as dst:
+                src.backup(dst)
+        except Exception:
+            try:
+                with closing(sqlite3.connect(str(self.current_db_path), timeout=10.0)) as ck_conn:
+                    ck_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
+            shutil.copy2(self.current_db_path, backup_file)

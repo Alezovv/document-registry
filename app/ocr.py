@@ -227,7 +227,7 @@ class OCR:
                     text_detection_model_dir=str(self.det_model_dir),
                     text_recognition_model_name="eslav_PP-OCRv5_mobile_rec",
                     text_recognition_model_dir=str(self.rec_model_dir),
-                    text_recognition_batch_size=4,
+                    text_recognition_batch_size=2,
                     use_doc_orientation_classify=False,
                     use_doc_unwarping=False,
                     use_textline_orientation=False,
@@ -255,7 +255,7 @@ class OCR:
                     if hasattr(engine, "paddlex_pipeline") and hasattr(engine.paddlex_pipeline, "_pipeline"):
                         pipe = engine.paddlex_pipeline._pipeline
                         if hasattr(pipe, "text_rec_model") and hasattr(pipe.text_rec_model, "batch_sampler"):
-                            pipe.text_rec_model.batch_sampler._batch_size = 4
+                            pipe.text_rec_model.batch_sampler._batch_size = 2
                 except Exception:
                     pass
             except OCRError:
@@ -317,8 +317,6 @@ class OCR:
         except Exception as error:
             raise OCRError(f"Не удалось открыть PDF:\n{error}") from error
 
-        from app.memory_metrics import set_process_below_normal_priority
-        set_process_below_normal_priority(True)
         try:
             page_count = len(document)
             if page_count == 0:
@@ -389,7 +387,6 @@ class OCR:
             return out_data
         finally:
             document.close()
-            set_process_below_normal_priority(False)
 
     def _extract_page(
         self,
@@ -632,6 +629,7 @@ class OCR:
         is_sufficient = False
         sufficiency_reason = "threshold"
         suggested_regions: list[dict[str, Any]] = []
+        check_res: Any = None
         if sufficiency_check is not None:
             try:
                 check_res = sufficiency_check(text, blocks)
@@ -735,8 +733,28 @@ class OCR:
                 confidence is not None and confidence < self.RETRY_CONFIDENCE_THRESHOLD
             ) or not is_sufficient
 
+        skip_heavy_retry = False
+        if needs_retry:
+            active_check = re_check if (re_check is not None) else check_res
+            skip_heavy, skip_reason, prep_from_check = self._should_skip_heavy_number_retry(
+                active_check,
+                best_text,
+                best_blocks,
+                quality=self._quality_score(best_text),
+                confidence=self._average_confidence(best_blocks),
+            )
+            if skip_heavy:
+                skip_heavy_retry = True
+                final_preparsed = prep_from_check
+                logger.info(
+                    "OCR pass on page %d: %s; skipping full-page retry at %d DPI",
+                    page_index + 1,
+                    skip_reason,
+                    self.retry_dpi,
+                )
+
         # 4. Full-page fallback retry only if zonal retry did not resolve sufficiency
-        if needs_retry and self.retry_dpi > self.default_dpi and allow_heavy_retry:
+        if needs_retry and not skip_heavy_retry and self.retry_dpi > self.default_dpi and allow_heavy_retry:
             final_preparsed = None
             logger.info("Executing full-page fallback retry at %d DPI for page %d", self.retry_dpi, page_index + 1)
             retry_text, retry_blocks = self._ocr_page(
@@ -751,7 +769,7 @@ class OCR:
             if retry_score > best_score:
                 best_text, best_blocks, best_score = retry_text, retry_blocks, retry_score
 
-        if not is_sufficient and best_score < self.ROTATION_RETRY_SCORE_THRESHOLD and allow_heavy_retry:
+        if not is_sufficient and not skip_heavy_retry and best_score < self.ROTATION_RETRY_SCORE_THRESHOLD and allow_heavy_retry:
             final_preparsed = None
             for rotation_quarters in (1, 3):
                 rotated_text, rotated_blocks = self._ocr_page(
@@ -772,6 +790,78 @@ class OCR:
 
         return PageExtractResult(best_text, best_blocks, final_preparsed)
 
+    def _should_skip_heavy_number_retry(
+        self,
+        active_check: Any,
+        text: str,
+        blocks: list[dict[str, Any]],
+        quality: float | None = None,
+        confidence: float | None = None,
+    ) -> tuple[bool, str, dict[str, Any]]:
+        """Policy B: Check if a heavy 200 DPI full-page retry can be safely bypassed.
+
+        A full-page retry is skipped ONLY when:
+        1. The only extraction insufficiency reason is 'missing_document_number'.
+        2. Core fields (received_date, from_department with len>=4, from_person,
+           request_subject with len>=10) are already reliably extracted.
+        3. OCR quality and average confidence meet or exceed safe thresholds
+           (quality >= RETRY_QUALITY_THRESHOLD and confidence >= RETRY_CONFIDENCE_THRESHOLD).
+
+        Returns:
+            tuple: (should_skip: bool, reason: str, preparsed_fields: dict)
+        """
+        if active_check is None:
+            return False, "no_active_check", {}
+
+        missing_reasons = getattr(active_check, "missing_reasons", None)
+        if missing_reasons is None and isinstance(active_check, tuple) and len(active_check) > 3:
+            missing_reasons = active_check[3]
+        if not missing_reasons:
+            return False, "no_missing_reasons", {}
+
+        # 1. Sole deficiency must be missing_document_number
+        if set(missing_reasons) != {"missing_document_number"}:
+            return False, f"multiple_or_other_missing_reasons:{missing_reasons}", {}
+
+        # Preparsed fields
+        eval_prep = getattr(active_check, "preparsed_fields", None)
+        if eval_prep is None and isinstance(active_check, tuple) and len(active_check) > 4:
+            eval_prep = active_check[4]
+        if not isinstance(eval_prep, dict):
+            return False, "no_preparsed_fields", {}
+
+        # 2. Core fields must be solid
+        has_date = bool(eval_prep.get("received_date"))
+        dept_str = str(eval_prep.get("from_department") or "").strip()
+        has_dept = len(dept_str) >= 4
+        has_signer = bool(eval_prep.get("from_person"))
+        subj_str = str(eval_prep.get("request_subject") or "").strip()
+        has_subject = len(subj_str) >= 10
+
+        if not (has_date and has_dept and has_signer and has_subject):
+            missing_core = []
+            if not has_date:
+                missing_core.append("date")
+            if not has_dept:
+                missing_core.append("department")
+            if not has_signer:
+                missing_core.append("signer")
+            if not has_subject:
+                missing_core.append("subject")
+            return False, f"insufficient_core_fields:{','.join(missing_core)}", {}
+
+        # 3. Quality & confidence thresholds
+        curr_q = quality if quality is not None else self._quality_score(text)
+        curr_conf = confidence if confidence is not None else self._average_confidence(blocks)
+
+        if curr_q < self.RETRY_QUALITY_THRESHOLD:
+            return False, f"quality_below_threshold:{curr_q:.3f}<{self.RETRY_QUALITY_THRESHOLD}", {}
+
+        if curr_conf is not None and curr_conf < self.RETRY_CONFIDENCE_THRESHOLD:
+            return False, f"confidence_below_threshold:{curr_conf:.3f}<{self.RETRY_CONFIDENCE_THRESHOLD}", {}
+
+        return True, "candidate_policy_b:only_missing_doc_number_with_solid_core_fields", eval_prep
+
     def recognize_region(
         self,
         page,
@@ -780,6 +870,7 @@ class OCR:
         dpi: int = 200,
         page_index: int = 0,
         enhance: bool = True,
+        retry_tuning: bool = True,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Perform high-resolution OCR on a sub-region directly rendered from the PDF.
 
@@ -822,13 +913,40 @@ class OCR:
         else:
             predict_input = image
 
+        # cvtColor produces a separate BGR buffer. If that happened, the
+        # source image and underlying pixmap may be released before inference
+        # to reduce the overlap between the raster and ONNX's working buffers.
+        if predict_input is not image:
+            del image
+            image = None
+            if pixmap is not None:
+                del pixmap
+                pixmap = None
+
         engine = self._get_engine()
-        results = engine.predict(predict_input)
+        if retry_tuning:
+            try:
+                results = engine.predict(
+                    predict_input,
+                    text_det_thresh=0.25,
+                    text_det_box_thresh=0.48,
+                    text_det_unclip_ratio=2.0,
+                    text_rec_score_thresh=0.18,
+                )
+            except TypeError:
+                results = engine.predict(predict_input)
+        else:
+            results = engine.predict(predict_input)
+
         raw_text, raw_blocks = self._extract_text(results)
         del results
         del predict_input
-        del image
-        del pixmap
+        if image is not None:
+            del image
+            image = None
+        if pixmap is not None:
+            del pixmap
+            pixmap = None
 
         base_scale = float(self.default_dpi) / 72.0
         coord_scale = float(self.default_dpi) / float(dpi)
@@ -960,11 +1078,13 @@ class OCR:
             image = self._pixmap_to_numpy(pixmap, keep_grayscale=True)
             if enhance:
                 image = self._enhance_image_for_retry(image, keep_grayscale=True)
-            if rotation_quarters:
+            unrot_height, unrot_width = image.shape[:2]
+            rotation_k = (rotation_quarters or 0) % 4
+            if rotation_k:
                 import numpy as np
-                image = np.ascontiguousarray(np.rot90(image, k=rotation_quarters))
+                image = np.ascontiguousarray(np.rot90(image, k=rotation_k))
 
-            orig_height, orig_width = image.shape[:2]
+            rot_height, rot_width = image.shape[:2]
             ocr_image, offset_x, offset_y = self._crop_margins(image)
             ocr_image, deskew_angle = self._deskew_image(ocr_image)
             deskew_h, deskew_w = ocr_image.shape[:2]
@@ -978,6 +1098,21 @@ class OCR:
                 predict_input = cv2.cvtColor(ocr_image[:, :, 0], cv2.COLOR_GRAY2BGR)
             else:
                 predict_input = ocr_image
+
+            # When BGR was created from grayscale, it owns an independent
+            # buffer. Drop the full-page Pixmap and intermediate views before
+            # ONNX allocates its own working tensors. If predict_input aliases
+            # ocr_image, keep the source alive until inference completes.
+            if predict_input is not ocr_image:
+                if ocr_image is not None:
+                    del ocr_image
+                    ocr_image = None
+                if image is not None:
+                    del image
+                    image = None
+                if pixmap is not None:
+                    del pixmap
+                    pixmap = None
 
             engine = self._get_engine()
             if retry_tuning:
@@ -1026,7 +1161,7 @@ class OCR:
                     block["x2"] = float(np.max(transformed[:, 0]))
                     block["y2"] = float(np.max(transformed[:, 1]))
             effective_ratio = max(0.05, clip_ratio - y_start_ratio)
-            full_height = float(orig_height / effective_ratio) if effective_ratio < 1.0 else float(orig_height)
+            full_height = float(rot_height / effective_ratio) if effective_ratio < 1.0 else float(rot_height)
             y_shift = float(offset_y) + (full_height * y_start_ratio if y_start_ratio > 0.0 else 0.0)
             for block in blocks:
                 if offset_x > 0 or y_shift > 0:
@@ -1034,10 +1169,40 @@ class OCR:
                     block["y1"] = float(block.get("y1", 0.0)) + y_shift
                     block["x2"] = float(block.get("x2", 0.0)) + offset_x
                     block["y2"] = float(block.get("y2", 0.0)) + y_shift
-                    block["center_y"] = (block["y1"] + block["y2"]) / 2.0
+
+            if rotation_k:
+                for block in blocks:
+                    bx1 = float(block.get("x1", 0.0))
+                    by1 = float(block.get("y1", 0.0))
+                    bx2 = float(block.get("x2", 0.0))
+                    by2 = float(block.get("y2", 0.0))
+                    corners = [(bx1, by1), (bx2, by1), (bx2, by2), (bx1, by2)]
+                    unrot_corners = []
+                    for cx_pt, cy_pt in corners:
+                        if rotation_k == 1:
+                            ux = float(unrot_width) - cy_pt
+                            uy = cx_pt
+                        elif rotation_k == 2:
+                            ux = float(unrot_width) - cx_pt
+                            uy = float(unrot_height) - cy_pt
+                        elif rotation_k == 3:
+                            ux = cy_pt
+                            uy = float(unrot_height) - cx_pt
+                        else:
+                            ux, uy = cx_pt, cy_pt
+                        unrot_corners.append((ux, uy))
+                    block["x1"] = float(min(c[0] for c in unrot_corners))
+                    block["y1"] = float(min(c[1] for c in unrot_corners))
+                    block["x2"] = float(max(c[0] for c in unrot_corners))
+                    block["y2"] = float(max(c[1] for c in unrot_corners))
+
+            final_page_w = float(unrot_width)
+            final_page_h = float(unrot_height / effective_ratio) if effective_ratio < 1.0 else float(unrot_height)
+            for block in blocks:
+                block["center_y"] = (float(block.get("y1", 0.0)) + float(block.get("y2", 0.0))) / 2.0
                 block["page_index"] = page_index
-                block["page_width"] = float(orig_width)
-                block["page_height"] = full_height
+                block["page_width"] = final_page_w
+                block["page_height"] = final_page_h
                 block["source"] = "ocr"
             return text, blocks
         except Exception as error:

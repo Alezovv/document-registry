@@ -548,8 +548,10 @@ class SettingsPage(QWidget):
         self.documents_path.setToolTip(path)
         self.confirm_delete.setChecked(confirm_delete)
         if update_source_dir is not None:
-            # Retained only for API compatibility with old settings pages.
-            self.update_source_path.setText("")
+            val = str(update_source_dir or "").strip()
+            self.update_source_dir = val
+            self.update_source_path.setText(val)
+            self.update_source_path.setToolTip(val)
         if performance_mode is not None:
             self.performance_mode = normalize_performance_mode(performance_mode)
             index = self.performance_mode_combo.findData(self.performance_mode)

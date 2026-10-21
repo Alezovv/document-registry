@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 from typing import Callable, Iterable
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 PRESERVED_REQUEST_COLUMNS = (
     "id", "received_date", "due_date", "completed_date", "from_department",
@@ -152,6 +152,8 @@ def expected_tables_for_schema(schema_version: int) -> set[str]:
         tables.update({"request_search_content", "request_fts"})
     if schema_version >= 7:
         tables.add("request_parser_metadata")
+    if schema_version >= 8:
+        tables.update({"cases", "case_requests"})
     return tables
 
 
@@ -197,22 +199,18 @@ def _migration_0_to_1(conn: sqlite3.Connection) -> None:
 
 
 def _migration_1_to_2(conn: sqlite3.Connection) -> None:
-    _migration_0_to_1(conn)
     _ensure_column(conn, "request_history", "snapshot", "TEXT")
 
 
 def _migration_2_to_3(conn: sqlite3.Connection) -> None:
-    _migration_0_to_1(conn)
     _ensure_column(conn, "requests", "due_date", "TEXT DEFAULT ''")
 
 
 def _migration_3_to_4(conn: sqlite3.Connection) -> None:
-    _migration_0_to_1(conn)
     _ensure_column(conn, "requests", "completed_date", "TEXT DEFAULT ''")
 
 
 def _migration_4_to_5(conn: sqlite3.Connection) -> None:
-    _migration_0_to_1(conn)
     _ensure_column(conn, "requests", "is_pinned", "INTEGER NOT NULL DEFAULT 0")
 
 
@@ -225,16 +223,16 @@ def _searchable_text_sql(prefix: str) -> str:
 
 
 def _drop_fts_triggers(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        DROP TRIGGER IF EXISTS trg_requests_fts_insert;
-        DROP TRIGGER IF EXISTS trg_requests_fts_update;
-        DROP TRIGGER IF EXISTS trg_requests_fts_delete;
-        DROP TRIGGER IF EXISTS trg_search_content_fts_insert;
-        DROP TRIGGER IF EXISTS trg_search_content_fts_update;
-        DROP TRIGGER IF EXISTS trg_search_content_fts_delete;
-        """
+    triggers = (
+        "trg_requests_fts_insert",
+        "trg_requests_fts_update",
+        "trg_requests_fts_delete",
+        "trg_search_content_fts_insert",
+        "trg_search_content_fts_update",
+        "trg_search_content_fts_delete",
     )
+    for trigger in triggers:
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
 
 
 def _create_search_index(conn: sqlite3.Connection) -> None:
@@ -265,7 +263,8 @@ def _create_search_index(conn: sqlite3.Connection) -> None:
 
     new_text = _searchable_text_sql("new")
     request_text = _searchable_text_sql("r")
-    conn.executescript(
+    _drop_fts_triggers(conn)
+    triggers = (
         f"""
         CREATE TRIGGER IF NOT EXISTS trg_requests_fts_insert
         AFTER INSERT ON requests
@@ -278,8 +277,9 @@ def _create_search_index(conn: sqlite3.Connection) -> None:
                     (SELECT ocr_text FROM request_search_content WHERE request_id = new.id), ''
                 )
             );
-        END;
-
+        END
+        """,
+        f"""
         CREATE TRIGGER IF NOT EXISTS trg_requests_fts_update
         AFTER UPDATE OF received_date, due_date, completed_date, from_department,
             from_position, from_person, to_person, request_subject, note, status
@@ -294,15 +294,17 @@ def _create_search_index(conn: sqlite3.Connection) -> None:
                     (SELECT ocr_text FROM request_search_content WHERE request_id = new.id), ''
                 )
             );
-        END;
-
+        END
+        """,
+        """
         CREATE TRIGGER IF NOT EXISTS trg_requests_fts_delete
         AFTER DELETE ON requests
         BEGIN
             DELETE FROM request_fts WHERE rowid = old.id;
             DELETE FROM request_search_content WHERE request_id = old.id;
-        END;
-
+        END
+        """,
+        f"""
         CREATE TRIGGER IF NOT EXISTS trg_search_content_fts_insert
         AFTER INSERT ON request_search_content
         BEGIN
@@ -310,8 +312,9 @@ def _create_search_index(conn: sqlite3.Connection) -> None:
             INSERT INTO request_fts(rowid, request_id, searchable_text)
             SELECT r.id, r.id, {request_text} || ' ' || COALESCE(new.ocr_text, '')
             FROM requests r WHERE r.id = new.request_id;
-        END;
-
+        END
+        """,
+        f"""
         CREATE TRIGGER IF NOT EXISTS trg_search_content_fts_update
         AFTER UPDATE OF ocr_text ON request_search_content
         BEGIN
@@ -319,8 +322,9 @@ def _create_search_index(conn: sqlite3.Connection) -> None:
             INSERT INTO request_fts(rowid, request_id, searchable_text)
             SELECT r.id, r.id, {request_text} || ' ' || COALESCE(new.ocr_text, '')
             FROM requests r WHERE r.id = new.request_id;
-        END;
-
+        END
+        """,
+        f"""
         CREATE TRIGGER IF NOT EXISTS trg_search_content_fts_delete
         AFTER DELETE ON request_search_content
         BEGIN
@@ -328,29 +332,31 @@ def _create_search_index(conn: sqlite3.Connection) -> None:
             INSERT INTO request_fts(rowid, request_id, searchable_text)
             SELECT r.id, r.id, {request_text}
             FROM requests r WHERE r.id = old.request_id;
-        END;
-        """
+        END
+        """,
     )
+    for trigger_sql in triggers:
+        conn.execute(trigger_sql)
 
-    conn.execute("DELETE FROM request_fts")
-    conn.execute(
-        f"""
-        INSERT INTO request_fts(rowid, request_id, searchable_text)
-        SELECT r.id, r.id,
-            {request_text} || ' ' || COALESCE(s.ocr_text, '')
-        FROM requests r
-        LEFT JOIN request_search_content s ON s.request_id = r.id
-        """
-    )
+    count_row = conn.execute("SELECT COUNT(*) FROM request_fts").fetchone()
+    fts_count = int(count_row[0]) if count_row else 0
+    if fts_count == 0:
+        conn.execute(
+            f"""
+            INSERT INTO request_fts(rowid, request_id, searchable_text)
+            SELECT r.id, r.id,
+                {request_text} || ' ' || COALESCE(s.ocr_text, '')
+            FROM requests r
+            LEFT JOIN request_search_content s ON s.request_id = r.id
+            """
+        )
 
 
 def _migration_5_to_6(conn: sqlite3.Connection) -> None:
-    _migration_4_to_5(conn)
     _create_search_index(conn)
 
 
 def _migration_6_to_7(conn: sqlite3.Connection) -> None:
-    _migration_5_to_6(conn)
     _ensure_column(conn, "requests", "source_sha256", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "requests", "source_size_bytes", "INTEGER NOT NULL DEFAULT 0")
     conn.execute(
@@ -370,6 +376,65 @@ def _migration_6_to_7(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_7_to_8(conn: sqlite3.Connection) -> None:
+    """Add user-managed related cases without changing existing request rows.
+
+    Earlier schema migrations are applied by the versioned migration runner; this
+    migration intentionally creates only the v8 tables and indexes.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS case_requests (
+            case_id INTEGER NOT NULL,
+            request_id INTEGER NOT NULL,
+            added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (case_id, request_id),
+            FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE,
+            FOREIGN KEY(request_id) REFERENCES requests(id) ON DELETE CASCADE
+        )
+        """
+    )
+    # The composite PK already indexes (case_id, request_id); only add the
+    # reverse lookup index plus the case ordering index.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_case_requests_request_id "
+        "ON case_requests(request_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cases_updated_at "
+        "ON cases(updated_at DESC, id DESC)"
+    )
+
+
+def _ensure_compatibility_shape(conn: sqlite3.Connection, target_schema: int) -> None:
+    _migration_0_to_1(conn)
+    if target_schema >= 2:
+        _migration_1_to_2(conn)
+    if target_schema >= 3:
+        _migration_2_to_3(conn)
+    if target_schema >= 4:
+        _migration_3_to_4(conn)
+    if target_schema >= 5:
+        _migration_4_to_5(conn)
+    if target_schema >= 6:
+        _migration_5_to_6(conn)
+    if target_schema >= 7:
+        _migration_6_to_7(conn)
+    if target_schema >= 8:
+        _migration_7_to_8(conn)
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _migration_0_to_1,
     1: _migration_1_to_2,
@@ -378,6 +443,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     4: _migration_4_to_5,
     5: _migration_5_to_6,
     6: _migration_6_to_7,
+    7: _migration_7_to_8,
 }
 
 
@@ -591,6 +657,22 @@ def compare_database_for_rollback(
                 else 0
             )
 
+            if target_schema < 8 and ("cases" in tables or "case_requests" in tables):
+                case_count = (
+                    int(conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0])
+                    if "cases" in tables else 0
+                )
+                link_count = (
+                    int(conn.execute("SELECT COUNT(*) FROM case_requests").fetchone()[0])
+                    if "case_requests" in tables else 0
+                )
+                affected_records += case_count + link_count
+                if case_count or link_count:
+                    warnings.append(
+                        f"Откат схемы удалит {case_count} карточек дел и {link_count} связей "
+                        "между делами и запросами. Сами запросы и PDF останутся в реестре."
+                    )
+
             schema_differs = current_schema != target_schema
             if schema_differs:
                 if current_schema > target_schema:
@@ -768,6 +850,29 @@ def validate_database(
             if validation_schema >= 7:
                 if "request_parser_metadata" not in tables:
                     raise DatabaseMigrationError("В БД отсутствует таблица метаданных parser-а: request_parser_metadata")
+
+            if validation_schema >= 8:
+                required_case_tables = {"cases", "case_requests"}
+                missing_case_tables = required_case_tables - tables
+                if missing_case_tables:
+                    raise DatabaseMigrationError(
+                        "В БД отсутствуют таблицы связанных дел: "
+                        + ", ".join(sorted(missing_case_tables))
+                    )
+                required_case_columns = {"id", "title", "note", "created_at", "updated_at"}
+                missing_case_columns = required_case_columns - _column_names(conn, "cases")
+                if missing_case_columns:
+                    raise DatabaseMigrationError(
+                        "В таблице cases отсутствуют поля: "
+                        + ", ".join(sorted(missing_case_columns))
+                    )
+                required_link_columns = {"case_id", "request_id", "added_at"}
+                missing_link_columns = required_link_columns - _column_names(conn, "case_requests")
+                if missing_link_columns:
+                    raise DatabaseMigrationError(
+                        "В таблице case_requests отсутствуют поля: "
+                        + ", ".join(sorted(missing_link_columns))
+                    )
 
             required_request_columns = {
                 "id",
@@ -997,6 +1102,11 @@ def downgrade_database(
 
                 _drop_fts_triggers(conn)
                 conn.execute("DROP TABLE IF EXISTS request_fts")
+                if target_schema < 8:
+                    # Drop memberships first because they reference both tables.
+                    # This explicitly discards only the new feature's metadata.
+                    conn.execute("DROP TABLE IF EXISTS case_requests")
+                    conn.execute("DROP TABLE IF EXISTS cases")
                 if target_schema < 7:
                     conn.execute("DROP TABLE IF EXISTS request_parser_metadata")
                     conn.execute("DROP INDEX IF EXISTS idx_requests_source_fingerprint")
@@ -1015,6 +1125,8 @@ def downgrade_database(
 
                 if target_schema >= 7:
                     _migration_6_to_7(conn)
+                if target_schema >= 8:
+                    _migration_7_to_8(conn)
 
                 conn.execute(f"PRAGMA user_version = {int(target_schema)}")
                 conn.commit()
@@ -1072,21 +1184,6 @@ def migrate_database(
                     f"БД имеет более новую схему {current}; текущая программа ожидает {target_schema}."
                 )
 
-            # Historical builds used a few idempotent compatibility repairs in
-            # addition to PRAGMA user_version. Apply the known shape builders
-            # once even when user_version is already current, so an old/partly
-            # upgraded database is repaired before strict validation.
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                for version in range(0, target_schema):
-                    migration = _MIGRATIONS.get(version)
-                    if migration is not None:
-                        migration(conn)
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-
             while current < target_schema:
                 migration = _MIGRATIONS.get(current)
                 if migration is None:
@@ -1102,6 +1199,16 @@ def migrate_database(
                     conn.rollback()
                     raise
                 current += 1
+
+            # Ensure any structural columns/tables expected by target_schema are present
+            # even if an external/partly upgraded database had its user_version incremented.
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                _ensure_compatibility_shape(conn, target_schema)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
     except DatabaseMigrationError:
         raise
     except sqlite3.Error as error:

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDateEdit,
@@ -84,6 +85,9 @@ class RequestFormMixin:
         if field is None:
             return
 
+        if isinstance(field, (SmartDateEdit, QCheckBox)):
+            return
+
         if isinstance(field, QTextEdit):
             text = field.toPlainText().strip()
         elif isinstance(field, QComboBox):
@@ -93,12 +97,11 @@ class RequestFormMixin:
         else:
             text = ""
 
-        if isinstance(field, SmartDateEdit):
-            return
         if text or isinstance(field, (QComboBox, QDateEdit)):
             field.setStyleSheet("")
 
-    def validate_and_accept(self):
+    def validate_current_data(self) -> bool:
+        """Validate form values without closing the dialog."""
         if (
             self.due_date.date() != self.due_date.minimumDate()
             and self.due_date.date() < self.received_date.date()
@@ -108,7 +111,7 @@ class RequestFormMixin:
                 "Некорректный срок",
                 "Срок исполнения не может быть раньше даты поступления.",
             )
-            return
+            return False
 
         if (
             self.completed_date.date() != self.completed_date.minimumDate()
@@ -119,7 +122,7 @@ class RequestFormMixin:
                 "Некорректная дата исполнения",
                 "Дата исполнения не может быть раньше даты поступления.",
             )
-            return
+            return False
 
         missing = []
         if not self.from_department.text().strip():
@@ -135,8 +138,12 @@ class RequestFormMixin:
             self.highlight_empty_fields()
             dialog = IncompleteDataDialog(missing, self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
+                return False
+        return True
 
+    def validate_and_accept(self):
+        if not self.validate_current_data():
+            return
         self._is_dirty = False
         self.accept()
 
@@ -204,6 +211,8 @@ class RequestFormMixin:
             self._is_dirty = True
 
     def _confirm_discard(self) -> bool:
+        if getattr(self, "_force_closing", False):
+            return True
         if not getattr(self, "_is_dirty", False):
             return True
 
@@ -220,11 +229,11 @@ class RequestFormMixin:
         return box.clickedButton() == discard
 
     def reject(self):
-        if self._confirm_discard():
+        if getattr(self, "_force_closing", False) or self._confirm_discard():
             super().reject()
 
     def closeEvent(self, event):
-        if self._confirm_discard():
+        if getattr(self, "_force_closing", False) or self._confirm_discard():
             event.accept()
         else:
             event.ignore()

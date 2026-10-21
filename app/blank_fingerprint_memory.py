@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import json
 import logging
 import os
@@ -175,7 +177,7 @@ class BlankFingerprintMemory:
 
     def _load(self) -> list[dict[str, Any]]:
         if not self.path.is_file():
-            return [dict(e) for e in DEFAULT_FINGERPRINTS]
+            return copy.deepcopy(DEFAULT_FINGERPRINTS)
         try:
             content = self.path.read_text(encoding="utf-8")
             data = json.loads(content)
@@ -192,13 +194,14 @@ class BlankFingerprintMemory:
                 merged = list(data)
                 for default_entry in DEFAULT_FINGERPRINTS:
                     if default_entry["department"] not in existing_depts:
-                        merged.append(dict(default_entry))
+                        merged.append(copy.deepcopy(default_entry))
                 return merged
         except Exception as error:
             logger.warning("Не удалось прочитать blank_fingerprints.json: %s", error)
-        return [dict(e) for e in DEFAULT_FINGERPRINTS]
+        return copy.deepcopy(DEFAULT_FINGERPRINTS)
 
     def _save(self) -> None:
+        tmp_name: str | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             payload = json.dumps(self._entries, ensure_ascii=False, indent=2)
@@ -213,6 +216,11 @@ class BlankFingerprintMemory:
                 os.fsync(handle.fileno())
             os.replace(tmp_name, self.path)
         except Exception as error:
+            if tmp_name:
+                try:
+                    Path(tmp_name).unlink(missing_ok=True)
+                except OSError:
+                    pass
             logger.warning("Не удалось сохранить blank_fingerprints.json: %s", error)
 
     def find_department(self, header_text: str) -> str | None:
@@ -291,7 +299,7 @@ class BlankFingerprintMemory:
         digit_like = r"[0-9OoОоIl|!iЗзSsБбВ]"
         ogrns = _extract_digits_pattern(header_slice, rf"\b(?:ОГРН|OGRN)\s*[:№]?\s*({digit_like}{{13}})\b")
         inns = _extract_digits_pattern(header_slice, rf"\b(?:ИНН|INN)(?:/[А-ЯA-Z]+)?\s*[:№]?\s*({digit_like}{{10}})\b")
-        phones: list[str] = []
+        phones = _extract_phones(header_slice)
 
         if not ogrns and not inns and not phones:
             return False

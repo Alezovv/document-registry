@@ -119,6 +119,15 @@ def compact_parser_diagnostics(diagnostics: Any) -> dict[str, Any]:
             if field in REVIEWABLE_FIELDS
         ],
         "document_type": str(diagnostics.get("document_type", "") or ""),
+        # Needed for related-case lists and request linking. Older metadata may
+        # not contain these keys; the UI falls back to the registry ID.
+        "document_number": str(
+            diagnostics.get("document_number") or diagnostics.get("doc_number") or ""
+        ).strip(),
+        "document_number_confidence": round(
+            float(diagnostics.get("document_number_confidence", diagnostics.get("doc_number_confidence", 0.0)) or 0.0),
+            3,
+        ),
     }
     return result
 

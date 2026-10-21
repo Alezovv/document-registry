@@ -17,6 +17,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QMessageBox,
     QMenu,
+    QInputDialog,
+    QListWidget,
+    QListWidgetItem,
     QScrollArea,
     QSizePolicy,
     QTextEdit,
@@ -28,6 +31,7 @@ from app.ui.date_controls import NoWheelComboBox, SmartDateEdit
 from app.parser_cache import ParserCache
 from app.pdf_highlight_service import PdfHighlightPreview
 from app.parser_review import FIELD_LABELS, REVIEWABLE_FIELDS, field_review_info, needs_review
+from app.ui.dialogs.case_dialog import CaseDialog, CasePickerDialog
 from app.ui.pdf_viewer_mixin import PdfViewerMixin
 from app.ui.request_form_mixin import RequestFormMixin
 from app.ui.styles import APP_STYLE, DIALOG_STYLE, STATUSES
@@ -113,6 +117,7 @@ class FlowLayout(QLayout):
 
 class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
     DELETE_RESULT = 2
+    SWITCH_REQUEST_RESULT = 3
 
     def __init__(
         self,
@@ -123,6 +128,7 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         suggestions=None,
         parser_diagnostics=None,
         duplicate_info=None,
+        request_service=None,
     ):
         super().__init__(parent)
         self.setWindowFlags(
@@ -136,16 +142,20 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         self.request = request
         self.documents_dir = Path(documents_dir) if documents_dir else None
         self.selected_pdf = None
+        self._force_closing = False
         self.detach_pdf_requested = False
         self.parsed = parsed
         self.suggestions = suggestions or {}
         self.parser_diagnostics = parser_diagnostics or {}
         self.duplicate_info = duplicate_info or {}
-        self.parser_cache = (
-            ParserCache(self.documents_dir.parent / "parser_cache")
-            if self.documents_dir is not None
-            else None
-        )
+        self.request_service = request_service
+        self._pending_case_ids: set[int] = set()
+        self._pending_new_case_title = ""
+        self._pending_new_case_note = ""
+        self.switch_target_request_id: int | None = None
+        self.switch_save_current = False
+        from app.app_paths import get_app_paths
+        self.parser_cache = ParserCache(get_app_paths().data / "parser_cache")
         self.pdf_highlight_preview = PdfHighlightPreview()
         self._pending_highlight_page = None
         self._highlight_field = None
@@ -154,9 +164,12 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         self.pdf_document = QPdfDocument(self)
         self.current_pdf_path = None
 
-        self.setStyleSheet(APP_STYLE + DIALOG_STYLE)
+        req_id = getattr(request, "id", None)
         self.setWindowTitle(
-            "Новый запрос" if request is None else "Редактирование запроса")
+            "Новый запрос"
+            if request is None
+            else (f"Редактирование запроса #{req_id}" if req_id else "Редактирование запроса")
+        )
 
         # Стартовый размер формы. Элементы вариантов переносятся внутри полей,
         # поэтому содержимое не должно расширять окно за пределы экрана.
@@ -187,6 +200,10 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         if request is not None:
             self.load_request()
             self.highlight_empty_fields()
+        else:
+            self._loaded = True
+
+        self._refresh_related_cases()
         self._apply_parser_review_styles()
 
     def _review_widget(self, field: str):
@@ -314,6 +331,348 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         outer.addLayout(badges)
         layout.addWidget(bar)
 
+    def _build_related_cases_card(self, form_layout: QVBoxLayout) -> None:
+        card = QFrame(self.form_container)
+        card.setObjectName("card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        title = QLabel("Связанные дела", card)
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        self.related_cases_summary = QLabel("", card)
+        self.related_cases_summary.setWordWrap(True)
+        self.related_cases_summary.setStyleSheet("color:#475467; font-size:12px;")
+        layout.addWidget(self.related_cases_summary)
+        self.related_cases_content = QVBoxLayout()
+        self.related_cases_content.setSpacing(8)
+        layout.addLayout(self.related_cases_content)
+
+        actions = QHBoxLayout()
+        self.related_add_button = QPushButton("Привязать к делу…", card)
+        self.related_add_button.clicked.connect(self._choose_case_to_link)
+        self.related_create_button = QPushButton("+ Создать дело", card)
+        self.related_create_button.clicked.connect(self._create_case_from_request)
+
+        related_btn_style = (
+            "QPushButton { "
+            "background-color: #FFFFFF; color: #344054; border: 1px solid #D0D5DD; "
+            "border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 600; min-height: 20px; "
+            "} "
+            "QPushButton:hover { background-color: #F8FAFC; border-color: #98A2B3; color: #1D2939; } "
+            "QPushButton:pressed { background-color: #F2F4F7; } "
+            "QPushButton:disabled { background-color: #F8FAFC; color: #94A3B8; border-color: #EAECF0; }"
+        )
+        self.related_add_button.setStyleSheet(related_btn_style)
+        self.related_create_button.setStyleSheet(related_btn_style)
+
+        actions.addWidget(self.related_add_button)
+        actions.addWidget(self.related_create_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+        if self.request_service is None:
+            self.related_add_button.setEnabled(False)
+            self.related_create_button.setEnabled(False)
+        form_layout.addWidget(card)
+
+    def get_request(self):
+        request = super().get_request()
+        request._pending_case_ids = sorted(self._pending_case_ids)
+        request._pending_new_case_title = self._pending_new_case_title
+        request._pending_new_case_note = self._pending_new_case_note
+        return request
+
+    def _clear_layout(self, layout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if widget is not None:
+                widget.deleteLater()
+            elif child_layout is not None:
+                self._clear_layout(child_layout)
+
+    def _refresh_related_cases(self) -> None:
+        if not hasattr(self, "related_cases_content"):
+            return
+        self._clear_layout(self.related_cases_content)
+        if self.request_service is None:
+            self.related_cases_summary.setText("Связанные дела недоступны в этом окне.")
+            return
+
+        is_saved = bool(self.request is not None and getattr(self.request, "id", None) is not None)
+        linked_cases = self.request_service.get_cases_for_request(int(self.request.id)) if is_saved else []
+        if not is_saved:
+            cases_by_id = {int(item["id"]): item for item in self.request_service.list_cases(limit=1000)}
+            pending_labels = [
+                str(cases_by_id.get(case_id, {}).get("title", f"Дело #{case_id}"))
+                for case_id in sorted(self._pending_case_ids)
+            ]
+            if self._pending_new_case_title:
+                pending_labels.append(self._pending_new_case_title)
+            if pending_labels:
+                self.related_cases_summary.setText("Будет добавлен в дела: " + "; ".join(pending_labels))
+            else:
+                self.related_cases_summary.setText(
+                    "После сохранения запрос можно связать с существующим делом или создать новое."
+                )
+        elif not linked_cases:
+            self.related_cases_summary.setText("Запрос не привязан к делу.")
+        else:
+            self.related_cases_summary.setText(f"Запрос входит в {len(linked_cases)} связ. дел.")
+
+        for case in linked_cases:
+            case_id = int(case["id"])
+            frame = QFrame(self.form_container)
+            frame.setStyleSheet("QFrame { background:#F8FAFC; border:1px solid #E4E7EC; border-radius:8px; }")
+            frame_layout = QVBoxLayout(frame)
+            frame_layout.setContentsMargins(10, 8, 10, 8)
+            frame_layout.setSpacing(6)
+            heading = QLabel(f"{case.get('title', '')} · документов: {int(case.get('request_count', 0) or 0)}", frame)
+            heading.setStyleSheet("font-weight:650; color:#344054; border:none; background:transparent;")
+            frame_layout.addWidget(heading)
+            members = QListWidget(frame)
+            members.setMaximumHeight(118)
+            members.setStyleSheet("QListWidget { border:none; background:transparent; } QListWidget::item { padding:4px; }")
+            for member in case.get("requests_preview", []):
+                request_id = int(member.get("id", 0) or 0)
+                status = str(member.get("status", "") or "Новый")
+                sender = str(member.get("from_department", "") or member.get("from_person", "") or "Отправитель не указан")
+                subject = str(member.get("request_subject", "") or "Без описания").replace("\n", " ")
+                number = str(member.get("document_number", "") or "").strip()
+                number_part = f" · № {number}" if number else ""
+                current_part = " · текущий" if request_id == getattr(self.request, "id", None) else ""
+                label = f"#{request_id}{number_part} · {member.get('received_date') or 'без даты'} · {sender} · {subject[:62]} · {status}{current_part}"
+                item = QListWidgetItem(label, members)
+                item.setData(Qt.ItemDataRole.UserRole, request_id)
+            members.itemDoubleClicked.connect(self._open_related_request_from_item)
+            frame_layout.addWidget(members)
+            row = QHBoxLayout()
+            open_case = QPushButton("Открыть дело", frame)
+            open_case.setStyleSheet(
+                "QPushButton { background-color: #FFFFFF; color: #344054; border: 1px solid #D0D5DD; "
+                "border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600; min-height: 18px; } "
+                "QPushButton:hover { background-color: #F8FAFC; border-color: #98A2B3; }"
+            )
+            open_case.clicked.connect(lambda _checked=False, cid=case_id: self._open_case_dialog(cid))
+            unlink = QPushButton("Убрать текущий запрос", frame)
+            unlink.setStyleSheet(
+                "QPushButton { background-color: #FFF7F6; color: #B42318; border: 1px solid #FECDCA; "
+                "border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600; min-height: 18px; } "
+                "QPushButton:hover { background-color: #FEE4E2; border-color: #FDA29B; }"
+            )
+            unlink.clicked.connect(lambda _checked=False, cid=case_id: self._remove_current_request_from_case(cid))
+            row.addWidget(open_case)
+            row.addWidget(unlink)
+            row.addStretch(1)
+            frame_layout.addLayout(row)
+            self.related_cases_content.addWidget(frame)
+
+        # Show relationships chosen for a not-yet-saved request.
+        if not is_saved and self._pending_case_ids:
+            cases_by_id = {int(item["id"]): item for item in self.request_service.list_cases(limit=1000)}
+            for case_id in sorted(self._pending_case_ids):
+                if case_id not in cases_by_id:
+                    continue
+                pending_row = QWidget(self.form_container)
+                pending_layout = QHBoxLayout(pending_row)
+                pending_layout.setContentsMargins(6, 3, 6, 3)
+                pending_label = QLabel(
+                    f"Будет добавлен: {cases_by_id[case_id].get('title', '')}", pending_row
+                )
+                pending_label.setWordWrap(True)
+                pending_label.setStyleSheet("color:#175CD3; background:transparent; border:none;")
+                remove_pending = QPushButton("Убрать", pending_row)
+                remove_pending.setFixedHeight(28)
+                remove_pending.setStyleSheet(
+                    "QPushButton { background-color: #FFFFFF; color: #B42318; border: 1px solid #FDA29B; "
+                    "border-radius: 6px; padding: 2px 10px; font-size: 12px; font-weight: 600; } "
+                    "QPushButton:hover { background-color: #FEE4E2; border-color: #D92D20; }"
+                )
+                remove_pending.clicked.connect(
+                    lambda _checked=False, cid=case_id: self._remove_pending_case(cid)
+                )
+                pending_layout.addWidget(pending_label, 1)
+                pending_layout.addWidget(remove_pending)
+                pending_row.setStyleSheet("background:#EFF8FF; border:1px solid #B2DDFF; border-radius:6px;")
+                self.related_cases_content.addWidget(pending_row)
+        if not is_saved and self._pending_new_case_title:
+            pending_row = QWidget(self.form_container)
+            pending_layout = QHBoxLayout(pending_row)
+            pending_layout.setContentsMargins(6, 3, 6, 3)
+            pending_label = QLabel(f"Будет создано: {self._pending_new_case_title}", pending_row)
+            pending_label.setWordWrap(True)
+            pending_label.setStyleSheet("color:#175CD3; background:transparent; border:none;")
+            remove_pending = QPushButton("Убрать", pending_row)
+            remove_pending.setFixedHeight(28)
+            remove_pending.setStyleSheet(
+                "QPushButton { background-color: #FFFFFF; color: #B42318; border: 1px solid #FDA29B; "
+                "border-radius: 6px; padding: 2px 10px; font-size: 12px; font-weight: 600; } "
+                "QPushButton:hover { background-color: #FEE4E2; border-color: #D92D20; }"
+            )
+            remove_pending.clicked.connect(self._remove_pending_new_case)
+            pending_layout.addWidget(pending_label, 1)
+            pending_layout.addWidget(remove_pending)
+            pending_row.setStyleSheet("background:#EFF8FF; border:1px solid #B2DDFF; border-radius:6px;")
+            self.related_cases_content.addWidget(pending_row)
+        if not linked_cases and not self._pending_case_ids and not self._pending_new_case_title:
+            empty = QLabel("Связи не добавлены.", self.form_container)
+            empty.setStyleSheet("color:#667085; font-size:11px; background:transparent; border:none;")
+            self.related_cases_content.addWidget(empty)
+
+    def _choose_case_to_link(self) -> None:
+        if self.request_service is None:
+            return
+        picker = CasePickerDialog(self.request_service, self)
+        if picker.exec() != QDialog.DialogCode.Accepted or picker.selected_case_id is None:
+            return
+        case_id = int(picker.selected_case_id)
+        if getattr(picker, "selected_action", "link") == "open":
+            self._open_case_dialog(case_id)
+            return
+        if self.request is None or self.request.id is None:
+            self._pending_case_ids.add(case_id)
+            self._is_dirty = True
+            self._refresh_related_cases()
+            return
+        try:
+            added = self.request_service.add_request_to_case(case_id, int(self.request.id))
+            if not added:
+                QMessageBox.information(self, "Связь уже существует", "Этот запрос уже входит в выбранное дело.")
+            self._refresh_related_cases()
+        except Exception as error:
+            QMessageBox.critical(self, "Ошибка привязки", f"Не удалось добавить запрос в дело:\n\n{error}")
+
+    def _remove_pending_case(self, case_id: int) -> None:
+        if int(case_id) in self._pending_case_ids:
+            self._pending_case_ids.remove(int(case_id))
+            self._is_dirty = True
+            self._refresh_related_cases()
+
+    def _remove_pending_new_case(self) -> None:
+        self._pending_new_case_title = ""
+        self._pending_new_case_note = ""
+        self._is_dirty = True
+        self._refresh_related_cases()
+
+    def _default_case_title(self) -> str:
+        who = self.to_person.text().strip() if hasattr(self, "to_person") else ""
+        source = self.from_department.text().strip() if hasattr(self, "from_department") else ""
+        subject = self.request_subject.toPlainText().replace("\n", " ").strip() if hasattr(self, "request_subject") else ""
+        detail = who or subject[:55] or (f"запрос #{self.request.id}" if self.request and self.request.id else "запрос")
+        if source:
+            detail += f" — {source}"
+        return f"Дело: {detail}"[:180]
+
+    def _create_case_from_request(self) -> None:
+        if self.request_service is None:
+            return
+        title, accepted = QInputDialog.getText(self, "Создать дело", "Название дела:", text=self._default_case_title())
+        if not accepted or not title.strip():
+            return
+        if self.request is None or self.request.id is None:
+            self._pending_new_case_title = title.strip()
+            self._pending_new_case_note = ""
+            self._is_dirty = True
+            self._refresh_related_cases()
+            return
+        try:
+            self.request_service.create_case(title.strip(), initial_request_ids=(int(self.request.id),))
+            self._refresh_related_cases()
+        except Exception as error:
+            QMessageBox.critical(self, "Ошибка создания дела", f"Не удалось создать дело:\n\n{error}")
+
+    def _remove_current_request_from_case(self, case_id: int) -> None:
+        if self.request is None or self.request.id is None or self.request_service is None:
+            return
+        answer = QMessageBox.question(
+            self, "Убрать из дела", f"Убрать запрос #{self.request.id} из этого дела?\n\nЗапрос и PDF останутся в реестре.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            remaining = self.request_service.remove_request_from_case(case_id, int(self.request.id))
+        except Exception as error:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось убрать связь:\n\n{error}")
+            return
+        if remaining == 0:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle("Пустое дело")
+            box.setText("В деле больше нет связанных запросов.")
+            keep = box.addButton("Оставить пустое дело", QMessageBox.ButtonRole.AcceptRole)
+            delete = box.addButton("Удалить дело", QMessageBox.ButtonRole.DestructiveRole)
+            box.setDefaultButton(keep)
+            box.exec()
+            if box.clickedButton() == delete:
+                try:
+                    self.request_service.delete_case(case_id)
+                except Exception as error:
+                    QMessageBox.critical(self, "Ошибка удаления", f"Связь уже удалена, но дело удалить не удалось:\n\n{error}")
+        self._refresh_related_cases()
+
+    def _open_case_dialog(self, case_id: int) -> None:
+        if self.request_service is None:
+            return
+        dialog = CaseDialog(self.request_service, case_id, self)
+        result = dialog.exec()
+        self._refresh_related_cases()
+        if result == CaseDialog.OPEN_REQUEST_RESULT and dialog.target_request_id is not None:
+            self._request_switch_to(int(dialog.target_request_id))
+
+    def _open_related_request_from_item(self, item: QListWidgetItem) -> None:
+        target_id = item.data(Qt.ItemDataRole.UserRole)
+        if target_id is not None and int(target_id) != getattr(self.request, "id", None):
+            self._request_switch_to(int(target_id))
+
+    def _has_unsaved_new_content(self) -> bool:
+        if self.request is not None and getattr(self.request, "id", None) is None:
+            return True
+        if self.request is None:
+            return bool(
+                (hasattr(self, "from_department") and self.from_department.text().strip())
+                or (hasattr(self, "from_position") and self.from_position.text().strip())
+                or (hasattr(self, "from_person") and self.from_person.text().strip())
+                or (hasattr(self, "to_person") and self.to_person.text().strip())
+                or (hasattr(self, "request_subject") and self.request_subject.toPlainText().strip())
+                or (hasattr(self, "note") and self.note.toPlainText().strip())
+                or getattr(self, "selected_pdf", None)
+                or self._pending_case_ids
+                or self._pending_new_case_title
+            )
+        return False
+
+    def _request_switch_to(self, request_id: int) -> None:
+        current_id = getattr(self.request, "id", None) if self.request is not None else None
+        if current_id is not None and int(request_id) == int(current_id):
+            return
+        save_current = False
+        needs_save_prompt = self._is_dirty or self._has_unsaved_new_content()
+        if needs_save_prompt:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle("Перейти к другому запросу")
+            box.setText("В текущем запросе есть несохранённые изменения.")
+            save = box.addButton("Сохранить и перейти", QMessageBox.ButtonRole.AcceptRole)
+            discard = box.addButton("Перейти без сохранения", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(save)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked == save:
+                if not self.validate_current_data():
+                    return
+                save_current = True
+            elif clicked == discard:
+                save_current = False
+            else:
+                return
+        self.switch_target_request_id = int(request_id)
+        self.switch_save_current = save_current
+        self.done(self.SWITCH_REQUEST_RESULT)
+
     def _resolve_pdf_path(self) -> Path | None:
         if getattr(self, "selected_pdf", None):
             candidate = Path(self.selected_pdf)
@@ -433,6 +792,8 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
             return False
         if getattr(widget, "_is_alternative_chip", False) or widget.property("_is_alternative_chip"):
             return True
+        pdf_container = getattr(self, "pdf_container", None)
+        pdf_view = getattr(self, "pdf_view", None)
         pdf_controls = (
             getattr(self, "btn_prev_page", None),
             getattr(self, "btn_next_page", None),
@@ -445,10 +806,14 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
             getattr(self, "zoom_label", None),
             getattr(self, "pdf_page_label", None),
             getattr(self, "pdf_preview_title", None),
+            getattr(self, "btn_view", None),
+            getattr(self, "btn_detach", None),
+            pdf_container,
+            pdf_view,
         )
         curr = widget
         while curr is not None:
-            if curr in pdf_controls:
+            if curr in pdf_controls or (pdf_container is not None and curr is pdf_container):
                 return True
             curr = getattr(curr, "parent", lambda: None)()
         return False
@@ -514,21 +879,8 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         if not self.duplicate_info:
             return
         orig_id = self.duplicate_info.get("original_id")
-        parts = [
-            f"Номер запроса: #{orig_id}",
-            f"Дата поступления: {self.duplicate_info.get('original_date', '—')}",
-            f"Статус: {self.duplicate_info.get('original_status', '—')}",
-            f"Отдел: {self.duplicate_info.get('original_department', '—')}",
-            f"Должность: {self.duplicate_info.get('original_position', '—')}",
-            f"ФИО: {self.duplicate_info.get('original_person', '—')}",
-            f"На кого: {self.duplicate_info.get('original_to_person', '—')}",
-            f"Суть запроса: {self.duplicate_info.get('original_subject', '—')}",
-        ]
-        QMessageBox.information(
-            self,
-            f"Оригинал: Запрос #{orig_id}",
-            "\n".join(parts),
-        )
+        if orig_id is not None:
+            self._request_switch_to(int(orig_id))
 
     def _install_suggestions(self, field: QLineEdit, key: str) -> None:
         values = [str(value).strip() for value in self.suggestions.get(key, []) if str(value).strip()]
@@ -748,9 +1100,12 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
 
             header_layout.addWidget(banner)
 
-        # "Распознавание" скрыто в режиме редактирования запроса по требованию
+        # "Распознавание" скрыто в режиме редактирования уже сохранённого запроса
         if not self.request:
             self._build_parser_review_bar(header_layout, header_widget)
+        elif getattr(self.request, "id", None) is None:
+            self._build_parser_review_bar(header_layout, header_widget)
+
 
         main_layout.addWidget(header_widget)
 
@@ -1047,6 +1402,9 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         card4_layout.addLayout(doc_row)
         form_layout.addWidget(card4)
 
+        # --- Карточка 5: Связанные дела ---
+        self._build_related_cases_card(form_layout)
+
         # Скролл-зона карточек
         scroll = QScrollArea(self.left_widget)
         scroll.setWidgetResizable(True)
@@ -1152,11 +1510,11 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         sep.setStyleSheet("color: #CBD5E1; margin: 4px 2px;")
 
         # Зум-контролы
-        btn_zoom_out = QPushButton("-", self.pdf_container)
-        btn_zoom_out.setFixedSize(30, 30)
-        btn_zoom_out.setStyleSheet(btn_style)
-        btn_zoom_out.setToolTip("Уменьшить")
-        btn_zoom_out.clicked.connect(self.zoom_out_pdf)
+        self.btn_zoom_out = QPushButton("-", self.pdf_container)
+        self.btn_zoom_out.setFixedSize(30, 30)
+        self.btn_zoom_out.setStyleSheet(btn_style)
+        self.btn_zoom_out.setToolTip("Уменьшить")
+        self.btn_zoom_out.clicked.connect(self.zoom_out_pdf)
 
         self.zoom_label = QLabel("Шир.", self.pdf_container)
         self.zoom_label.setFixedWidth(42)
@@ -1165,33 +1523,33 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
             "color: #475569; font-size: 11px; font-weight: 600;"
         )
 
-        btn_zoom_in = QPushButton("+", self.pdf_container)
-        btn_zoom_in.setFixedSize(30, 30)
-        btn_zoom_in.setStyleSheet(btn_style)
-        btn_zoom_in.setToolTip("Увеличить")
-        btn_zoom_in.clicked.connect(self.zoom_in_pdf)
+        self.btn_zoom_in = QPushButton("+", self.pdf_container)
+        self.btn_zoom_in.setFixedSize(30, 30)
+        self.btn_zoom_in.setStyleSheet(btn_style)
+        self.btn_zoom_in.setToolTip("Увеличить")
+        self.btn_zoom_in.clicked.connect(self.zoom_in_pdf)
 
-        btn_fit_w = QPushButton("↔", self.pdf_container)
-        btn_fit_w.setFixedSize(30, 30)
-        btn_fit_w.setStyleSheet(btn_style)
-        btn_fit_w.setToolTip("По ширине окна")
-        btn_fit_w.clicked.connect(self.zoom_fit_width)
+        self.btn_fit_w = QPushButton("↔", self.pdf_container)
+        self.btn_fit_w.setFixedSize(30, 30)
+        self.btn_fit_w.setStyleSheet(btn_style)
+        self.btn_fit_w.setToolTip("По ширине окна")
+        self.btn_fit_w.clicked.connect(self.zoom_fit_width)
 
-        btn_fit_page = QPushButton("⊡", self.pdf_container)
-        btn_fit_page.setFixedSize(30, 30)
-        btn_fit_page.setStyleSheet(btn_style)
-        btn_fit_page.setToolTip("Вся страница целиком")
-        btn_fit_page.clicked.connect(self.zoom_fit_page)
+        self.btn_fit_page = QPushButton("⊡", self.pdf_container)
+        self.btn_fit_page.setFixedSize(30, 30)
+        self.btn_fit_page.setStyleSheet(btn_style)
+        self.btn_fit_page.setToolTip("Вся страница целиком")
+        self.btn_fit_page.clicked.connect(self.zoom_fit_page)
 
-        btn_ext = QPushButton("↗", self.pdf_container)
-        btn_ext.setFixedSize(30, 30)
-        btn_ext.setStyleSheet(btn_style)
-        btn_ext.setToolTip("Открыть во внешней программе")
-        btn_ext.clicked.connect(self.open_external_pdf)
+        self.btn_ext = QPushButton("↗", self.pdf_container)
+        self.btn_ext.setFixedSize(30, 30)
+        self.btn_ext.setStyleSheet(btn_style)
+        self.btn_ext.setToolTip("Открыть во внешней программе")
+        self.btn_ext.clicked.connect(self.open_external_pdf)
 
-        btn_close_pdf = QPushButton("×", self.pdf_container)
-        btn_close_pdf.setFixedSize(30, 30)
-        btn_close_pdf.setStyleSheet("""
+        self.btn_close_pdf = QPushButton("×", self.pdf_container)
+        self.btn_close_pdf.setFixedSize(30, 30)
+        self.btn_close_pdf.setStyleSheet("""
             QPushButton {
                 background: transparent;
                 border: none;
@@ -1204,7 +1562,7 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
             }
             QPushButton:hover { background: #E2E8F0; color: #0F172A; }
         """)
-        btn_close_pdf.clicked.connect(lambda: self.toggle_pdf_viewer(False))
+        self.btn_close_pdf.clicked.connect(lambda: self.toggle_pdf_viewer(False))
 
         # Сборка тулбара просмотрщика в правильном порядке
         pdf_top_bar.addWidget(self.pdf_preview_title)
@@ -1213,13 +1571,13 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         pdf_top_bar.addWidget(self.pdf_page_label)
         pdf_top_bar.addWidget(self.btn_next_page)
         pdf_top_bar.addWidget(sep)
-        pdf_top_bar.addWidget(btn_zoom_out)
+        pdf_top_bar.addWidget(self.btn_zoom_out)
         pdf_top_bar.addWidget(self.zoom_label)
-        pdf_top_bar.addWidget(btn_zoom_in)
-        pdf_top_bar.addWidget(btn_fit_w)
-        pdf_top_bar.addWidget(btn_fit_page)
-        pdf_top_bar.addWidget(btn_ext)
-        pdf_top_bar.addWidget(btn_close_pdf)
+        pdf_top_bar.addWidget(self.btn_zoom_in)
+        pdf_top_bar.addWidget(self.btn_fit_w)
+        pdf_top_bar.addWidget(self.btn_fit_page)
+        pdf_top_bar.addWidget(self.btn_ext)
+        pdf_top_bar.addWidget(self.btn_close_pdf)
         pdf_box.addLayout(pdf_top_bar)
 
         # Виджет рендера страниц PDF
@@ -1280,3 +1638,9 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         # Активируем отслеживание изменений для нового запроса
         if self.request is None:
             self._loaded = True
+
+    def force_close(self) -> None:
+        """Force immediate dialog closure during application shutdown."""
+        self._force_closing = True
+        self.reject()
+

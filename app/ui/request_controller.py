@@ -21,63 +21,177 @@ class RequestController(QObject):
         self.request_service = request_service
         self.documents_dir_getter = documents_dir_getter
         self.parent_widget = parent
+        self.active_dialog: RequestDialog | None = None
+        self._is_closing: bool = False
+
+    def close_active_dialog(self) -> None:
+        self._is_closing = True
+        dialog = self.active_dialog
+        if dialog is not None:
+            self.active_dialog = None
+            if hasattr(dialog, "force_close"):
+                dialog.force_close()
+            else:
+                dialog.reject()
 
     def add_request(self):
-        dialog = RequestDialog(
-            self.parent_widget,
-            documents_dir=self.documents_dir_getter(),
-            suggestions=self.request_service.get_form_suggestions(),
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        draft_request = None
+        force_dirty_on_reopen = False
+        while True:
+            if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
+                return
+            dialog = RequestDialog(
+                self.parent_widget,
+                request=draft_request,
+                documents_dir=self.documents_dir_getter(),
+                suggestions=self.request_service.get_form_suggestions(),
+                request_service=self.request_service,
+            )
+            if force_dirty_on_reopen:
+                dialog._is_dirty = True
+                force_dirty_on_reopen = False
+            self.active_dialog = dialog
+            if self.parent_widget is not None and hasattr(self.parent_widget, "register_dialog"):
+                self.parent_widget.register_dialog(dialog)
+            try:
+                res = dialog.exec()
+            finally:
+                self.active_dialog = None
+                if self.parent_widget is not None and hasattr(self.parent_widget, "unregister_dialog"):
+                    self.parent_widget.unregister_dialog(dialog)
+            if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
+                return
+            if res == RequestDialog.SWITCH_REQUEST_RESULT:
+                if getattr(dialog, "switch_save_current", False):
+                    draft = dialog.get_request()
+                    try:
+                        self.request_service.create_request(draft)
+                        self.changed.emit()
+                        self.toast_requested.emit("Запрос создан", "Новый запрос успешно добавлен в реестр.", "success")
+                    except Exception as error:
+                        logger.exception("Ошибка при создании запроса перед переходом")
+                        QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось создать запрос:\n\n{error}")
+                        draft_request = draft
+                        force_dirty_on_reopen = True
+                        continue
+                target_id = dialog.switch_target_request_id
+                if target_id is not None:
+                    target = self.request_service.get_request(int(target_id))
+                    if target is not None:
+                        self.edit_request(target)
+                return
+            if res != QDialog.DialogCode.Accepted:
+                return
+            try:
+                self.request_service.create_request(dialog.get_request())
+            except Exception as error:
+                logger.exception("Ошибка при создании запроса")
+                QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось создать запрос:\n\n{error}")
+                draft_request = dialog.get_request()
+                force_dirty_on_reopen = True
+                continue
+            self.changed.emit()
+            self.toast_requested.emit("Запрос создан", "Новый запрос успешно добавлен в реестр.", "success")
             return
-        try:
-            self.request_service.create_request(dialog.get_request())
-        except Exception as error:
-            logger.exception("Ошибка при создании запроса")
-            QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось создать запрос:\n\n{error}")
-            return
-        self.changed.emit()
-        self.toast_requested.emit("Запрос создан", "Новый запрос успешно добавлен в реестр.", "success")
 
     def edit_request(self, request):
-        if request is None:
+        """Open request dialogs in one controller loop, avoiding nested RequestDialog.exec()."""
+        if request is None or request.id is None:
             return
-        diagnostics = self.request_service.get_parser_metadata(request.id) if request.id else {}
-        dup_info = self.request_service.get_request_duplicate_info(request.id) if request.id else None
-        presented_request = replace(request)
-        dialog = RequestDialog(
-            self.parent_widget,
-            request=request,
-            documents_dir=self.documents_dir_getter(),
-            suggestions=self.request_service.get_form_suggestions(),
-            parser_diagnostics=diagnostics,
-            duplicate_info=dup_info,
-        )
-        result = dialog.exec()
-        if result == RequestDialog.DELETE_RESULT:
-            try:
-                self.request_service.delete_request(request.id)
-            except Exception as error:
-                logger.exception("Ошибка удаления запроса из карточки")
-                QMessageBox.critical(self.parent_widget, "Ошибка удаления", f"Не удалось удалить запрос:\n\n{error}")
+        request_to_open = self.request_service.get_request(int(request.id)) or request
+        force_dirty_on_reopen = False
+
+        while request_to_open is not None:
+            if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
                 return
-            self.changed.emit()
-            self.toast_requested.emit("Запрос удалён", "Запрос успешно удалён из реестра.", "warning")
-            return
-        if result != QDialog.DialogCode.Accepted:
-            return
-        try:
-            updated = dialog.get_request()
-            self.request_service.update_request(updated)
-            self.request_service.learn_parser_corrections(
-                presented_request, updated, context=diagnostics
+            current_id = int(request_to_open.id)
+            diagnostics = self.request_service.get_parser_metadata(current_id) if current_id else {}
+            dup_info = self.request_service.get_request_duplicate_info(current_id) if current_id else None
+            presented_request = replace(request_to_open)
+            dialog = RequestDialog(
+                self.parent_widget,
+                request=request_to_open,
+                documents_dir=self.documents_dir_getter(),
+                suggestions=self.request_service.get_form_suggestions(),
+                parser_diagnostics=diagnostics,
+                duplicate_info=dup_info,
+                request_service=self.request_service,
             )
-        except Exception as error:
-            logger.exception("Ошибка обновления запроса")
-            QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось обновить запрос:\n\n{error}")
+            if force_dirty_on_reopen:
+                dialog._is_dirty = True
+                force_dirty_on_reopen = False
+
+            self.active_dialog = dialog
+            if self.parent_widget is not None and hasattr(self.parent_widget, "register_dialog"):
+                self.parent_widget.register_dialog(dialog)
+            try:
+                result = dialog.exec()
+            finally:
+                self.active_dialog = None
+                if self.parent_widget is not None and hasattr(self.parent_widget, "unregister_dialog"):
+                    self.parent_widget.unregister_dialog(dialog)
+
+            if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
+                return
+            if result == RequestDialog.DELETE_RESULT:
+                try:
+                    self.request_service.delete_request(current_id)
+                except Exception as error:
+                    logger.exception("Ошибка удаления запроса из карточки")
+                    QMessageBox.critical(self.parent_widget, "Ошибка удаления", f"Не удалось удалить запрос:\n\n{error}")
+                    return
+                self.changed.emit()
+                self.toast_requested.emit("Запрос удалён", "Запрос успешно удалён из реестра.", "warning")
+                return
+
+            if result == RequestDialog.SWITCH_REQUEST_RESULT:
+                target_id = dialog.switch_target_request_id
+                if target_id is None:
+                    return
+                if dialog.switch_save_current:
+                    updated = dialog.get_request()
+                    try:
+                        self.request_service.update_request(updated)
+                        self.request_service.learn_parser_corrections(
+                            presented_request, updated, context=diagnostics
+                        )
+                        self.changed.emit()
+                    except Exception as error:
+                        logger.exception("Не удалось сохранить запрос перед переключением")
+                        QMessageBox.critical(
+                            self.parent_widget,
+                            "Ошибка сохранения",
+                            f"Не удалось сохранить запрос #{current_id}. Вы можете повторить сохранение.\n\n{error}",
+                        )
+                        # Keep the user's edits in the next dialog instead of dropping them.
+                        request_to_open = updated
+                        force_dirty_on_reopen = True
+                        continue
+                target = self.request_service.get_request(int(target_id))
+                if target is None:
+                    QMessageBox.warning(self.parent_widget, "Запрос не найден", f"Связанный запрос #{target_id} больше не существует.")
+                    request_to_open = self.request_service.get_request(current_id)
+                    continue
+                request_to_open = target
+                continue
+
+            if result != QDialog.DialogCode.Accepted:
+                return
+            try:
+                updated = dialog.get_request()
+                self.request_service.update_request(updated)
+                self.request_service.learn_parser_corrections(
+                    presented_request, updated, context=diagnostics
+                )
+            except Exception as error:
+                logger.exception("Ошибка обновления запроса")
+                QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось обновить запрос:\n\n{error}")
+                request_to_open = updated
+                force_dirty_on_reopen = True
+                continue
+            self.changed.emit()
+            self.toast_requested.emit("Запрос обновлён", "Изменения успешно сохранены.", "success")
             return
-        self.changed.emit()
-        self.toast_requested.emit("Запрос обновлён", "Изменения успешно сохранены.", "success")
 
     def delete_requests(self, requests, confirm: bool = True):
         requests = list(requests)

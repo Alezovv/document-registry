@@ -10,7 +10,7 @@ from app.portable_paths import RUNTIME_TOKEN, absolute_without_resolving
 from app.resource_profile import normalize_performance_mode
 
 logger = logging.getLogger(__name__)
-VALID_PAGES = {"registry", "documents", "history", "settings"}
+VALID_PAGES = {"registry", "documents", "history", "settings", "shahmatka"}
 
 
 @dataclass(slots=True)

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import datetime
+from html import escape
+import os
 from pathlib import Path
+import shutil
 import sqlite3
 from typing import Any
 
@@ -21,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.db_merge import DatabaseMergeService
-from app.db_migrations import CURRENT_SCHEMA_VERSION, migrate_database
+from app.db_migrations import CURRENT_SCHEMA_VERSION, get_schema_version, migrate_database
 from app.text_encoding import loads_json_with_fallback, repair_cyrillic_mojibake
 from app.ui.dialogs.merge_preview_dialog import MergePreviewDialog
 from app.ui.styles import PRIMARY_COLOR, PRIMARY_HOVER
@@ -230,14 +234,25 @@ class RollbackDatabaseTab(QWidget):
             size_mb = db_path.stat().st_size / (1024 * 1024)
             size_str = f"{size_mb:.2f} МБ"
 
+        file_name = escape(db_path.name, quote=False) if db_path else "Не определён"
+        src_ver = escape(str(snap.get("source_version")), quote=False)
+        src_sch = escape(str(snap.get("source_schema")), quote=False)
+        tgt_ver = escape(str(snap.get("target_version")), quote=False)
+        tgt_sch = escape(str(snap.get("target_schema")), quote=False)
+        req_cnt = escape(str(snap.get("requests_count", "?")), quote=False)
+        hist_cnt = escape(str(snap.get("history_count", "?")), quote=False)
+
         lines = [
-            f"<b>Файл снимка:</b> {db_path.name if db_path else 'Не определён'} ({size_str})",
-            f"<b>Переход:</b> версия {snap.get('source_version')} (схема {snap.get('source_schema')}) → "
-            f"версия {snap.get('target_version')} (схема {snap.get('target_schema')})",
-            f"<b>Записей:</b> запросов — {snap.get('requests_count', '?')}, записей истории — {snap.get('history_count', '?')}",
+            f"<b>Файл снимка:</b> {file_name} ({size_str})",
+            f"<b>Переход:</b> версия {src_ver} (схема {src_sch}) → "
+            f"версия {tgt_ver} (схема {tgt_sch})",
+            f"<b>Записей:</b> запросов — {req_cnt}, записей истории — {hist_cnt}",
         ]
         if snap.get("warnings"):
-            cleaned_warnings = [repair_cyrillic_mojibake(str(w)) for w in snap["warnings"]]
+            cleaned_warnings = [
+                escape(repair_cyrillic_mojibake(str(w)), quote=False)
+                for w in snap["warnings"]
+            ]
             lines.append(f"<b>Предупреждения при откате:</b> {', '.join(cleaned_warnings)}")
         self.details_label.setText("<br>".join(lines))
 
@@ -262,14 +277,24 @@ class RollbackDatabaseTab(QWidget):
             pass
 
     def _resolve_snapshot_db_path(self, snap: dict[str, Any]) -> Path | None:
-        raw_path = snap.get("database_path")
-        if raw_path and Path(raw_path).is_file():
-            return Path(raw_path)
+        rollback_root = self.service.rollback_backups_dir.resolve()
+
         filename = snap.get("database_file")
         if filename:
-            candidate = self.service.rollback_backups_dir / filename
-            if candidate.is_file():
+            clean_name = Path(filename).name
+            candidate = (rollback_root / clean_name).resolve()
+            if candidate.parent == rollback_root and candidate.is_file():
                 return candidate
+
+        raw_path = snap.get("database_path")
+        if raw_path:
+            candidate = Path(raw_path).resolve()
+            try:
+                if candidate.parent == rollback_root and candidate.is_file():
+                    return candidate
+            except (ValueError, OSError):
+                pass
+
         return None
 
     # ── Обработчики кнопок ────────────────────────────────────
@@ -311,7 +336,7 @@ class RollbackDatabaseTab(QWidget):
             backup_service=self.backup_service,
         )
 
-        if result.success:
+        if result.is_full_success:
             QMessageBox.information(
                 self,
                 "Слияние выполнено",
@@ -319,11 +344,23 @@ class RollbackDatabaseTab(QWidget):
                 "Перед слиянием создана точка восстановления текущей базы.",
             )
             self.database_merged.emit()
+        elif result.is_partial:
+            error_details = "\n".join(result.errors[:10])
+            if len(result.errors) > 10:
+                error_details += f"\n...и ещё {len(result.errors) - 10} ошибок"
+            QMessageBox.warning(
+                self,
+                "Слияние выполнено частично",
+                f"Слияние выполнено с замечаниями по отдельным записям.\n\n{result.summary}\n\n"
+                f"Ошибки:\n{error_details}\n\n"
+                "Перед слиянием создана точка восстановления текущей базы.",
+            )
+            self.database_merged.emit()
         else:
             QMessageBox.critical(
                 self,
                 "Ошибка слияния",
-                f"Произошла ошибка при слиянии данных:\n" + "\n".join(result.errors),
+                f"Произошла ошибка при слиянии данных:\n" + "\n".join(result.errors[:15]),
             )
 
     def _on_restore_clicked(self) -> None:
@@ -347,29 +384,102 @@ class RollbackDatabaseTab(QWidget):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        # 1. Защитный бэкап рабочей БД
-        if self.backup_service:
-            self.backup_service.create_backup("pre_snapshot_restore")
-        else:
-            cur_db = self.service._database_path
-            backup_target = cur_db.with_name(f"{cur_db.stem}.before_restore{cur_db.suffix}")
-            import shutil
-            shutil.copy2(cur_db, backup_target)
+        live_db = self.service._database_path
+        candidate_tmp = live_db.with_name(f".{live_db.name}.restore_candidate")
 
-        # 2. Подмена рабочего файла
+        # 1. Предварительная верификация снимка во временном файле ДО любых изменений рабочей базы
         try:
-            import shutil
-            shutil.copy2(db_path, self.service._database_path)
-            # Очистка WAL/SHM файлов текущей базы
-            wal = self.service._database_path.with_name(self.service._database_path.name + "-wal")
-            shm = self.service._database_path.with_name(self.service._database_path.name + "-shm")
-            if wal.is_file():
-                wal.unlink(missing_ok=True)
-            if shm.is_file():
-                shm.unlink(missing_ok=True)
+            candidate_tmp.unlink(missing_ok=True)
+            shutil.copy2(db_path, candidate_tmp)
 
-            # Ensure the restored database is migrated up to the running app's schema
-            migrate_database(self.service._database_path, target_schema=CURRENT_SCHEMA_VERSION)
+            with closing(sqlite3.connect(candidate_tmp, timeout=5.0)) as test_conn:
+                test_conn.execute("PRAGMA query_only = ON")
+                check = test_conn.execute("PRAGMA integrity_check").fetchone()
+                if not check or check[0] != "ok":
+                    raise RuntimeError(f"Целостность файла снимка нарушена: {check[0] if check else 'неизвестная ошибка'}")
+
+            snap_schema = get_schema_version(candidate_tmp)
+            if snap_schema > CURRENT_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Снимок создан в более новой версии программы (схема v{snap_schema}, текущая v{CURRENT_SCHEMA_VERSION}). "
+                    "Восстановление невозможно без обновления программы."
+                )
+            elif snap_schema < CURRENT_SCHEMA_VERSION:
+                migrate_database(candidate_tmp, target_schema=CURRENT_SCHEMA_VERSION)
+                with closing(sqlite3.connect(candidate_tmp, timeout=5.0)) as test_conn:
+                    test_conn.execute("PRAGMA query_only = ON")
+                    check = test_conn.execute("PRAGMA integrity_check").fetchone()
+                    if not check or check[0] != "ok":
+                        raise RuntimeError("Целостность базы нарушена после миграции схемы.")
+
+        except Exception as e:
+            candidate_tmp.unlink(missing_ok=True)
+            QMessageBox.critical(self, "Ошибка восстановления", f"Снимок повреждён или несовместим: {e}")
+            return
+
+        # 2. Защитный бэкап рабочей БД (с меткой времени)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            if self.backup_service:
+                self.backup_service.create_backup(f"pre_snapshot_restore_{timestamp}")
+            else:
+                backup_target = live_db.with_name(f"{live_db.stem}.before_restore_{timestamp}{live_db.suffix}")
+                try:
+                    with closing(sqlite3.connect(live_db, timeout=30.0)) as src, closing(sqlite3.connect(backup_target)) as dst:
+                        src.backup(dst)
+                except Exception:
+                    try:
+                        with closing(sqlite3.connect(live_db, timeout=10.0)) as ck_conn:
+                            ck_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except Exception:
+                        pass
+                    shutil.copy2(live_db, backup_target)
+        except Exception as e:
+            candidate_tmp.unlink(missing_ok=True)
+            QMessageBox.critical(
+                self,
+                "Ошибка восстановления",
+                f"Не удалось создать защитную резервную копию рабочей базы: {e}\nВосстановление отменено.",
+            )
+            return
+
+        # 3. Безопасное восстановление активной базы
+        try:
+            try:
+                with closing(sqlite3.connect(candidate_tmp)) as src_conn, closing(sqlite3.connect(live_db, timeout=10.0)) as dst_conn:
+                    dst_conn.execute("PRAGMA busy_timeout = 5000")
+                    src_conn.backup(dst_conn)
+                    try:
+                        dst_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except Exception:
+                        pass
+            except Exception:
+                # The migrated candidate may itself be in WAL mode. Fold its WAL
+                # into the main file and switch to DELETE mode before replacing
+                # the live database; otherwise candidate_tmp-wal would be left
+                # behind and its committed pages could be lost.
+                with closing(sqlite3.connect(candidate_tmp, timeout=10.0)) as candidate_conn:
+                    candidate_conn.execute("PRAGMA busy_timeout = 10000")
+                    checkpoint = candidate_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                    if checkpoint and int(checkpoint[0]) != 0:
+                        raise RuntimeError("Не удалось выполнить checkpoint WAL для снимка базы.")
+                    mode = candidate_conn.execute("PRAGMA journal_mode = DELETE").fetchone()
+                    if mode and str(mode[0]).lower() != "delete":
+                        raise RuntimeError("Не удалось отключить WAL у снимка базы.")
+                # Ensure the live database has no unapplied WAL before replacing
+                # its main file. If SQLite cannot switch it out of WAL mode, fail
+                # safely instead of deleting sidecars that may contain committed data.
+                with closing(sqlite3.connect(live_db, timeout=10.0)) as live_conn:
+                    live_conn.execute("PRAGMA busy_timeout = 10000")
+                    live_checkpoint = live_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                    if live_checkpoint and int(live_checkpoint[0]) != 0:
+                        raise RuntimeError("Не удалось выполнить checkpoint WAL рабочей базы.")
+                    live_mode = live_conn.execute("PRAGMA journal_mode = DELETE").fetchone()
+                    if live_mode and str(live_mode[0]).lower() != "delete":
+                        raise RuntimeError("Не удалось безопасно переключить рабочую базу из WAL.")
+                os.replace(candidate_tmp, live_db)
+            finally:
+                candidate_tmp.unlink(missing_ok=True)
 
             QMessageBox.information(
                 self,
@@ -379,7 +489,8 @@ class RollbackDatabaseTab(QWidget):
             )
             self.database_restored.emit()
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка восстановления", f"Не удалось восстановить базу: {e}")
+            candidate_tmp.unlink(missing_ok=True)
+            QMessageBox.critical(self, "Ошибка восстановления", f"Не удалось заменить рабочий файл базы: {e}")
 
     def _on_delete_clicked(self) -> None:
         if not self._selected_snapshot:
@@ -397,10 +508,12 @@ class RollbackDatabaseTab(QWidget):
 
         db_path = self._resolve_snapshot_db_path(self._selected_snapshot)
         if db_path and db_path.is_file():
-            try:
-                db_path.unlink()
-            except Exception as e:
-                QMessageBox.warning(self, "Внимание", f"Не удалось удалить файл БД: {e}")
+            # Гарантируем, что файл удаляется только внутри rollback_backups_dir
+            if db_path.resolve().parent == self.service.rollback_backups_dir.resolve():
+                try:
+                    db_path.unlink()
+                except Exception as e:
+                    QMessageBox.warning(self, "Внимание", f"Не удалось удалить файл БД: {e}")
 
         # Удаление соответствующего json
         for meta_file in self.service.rollback_backups_dir.glob("*.json"):

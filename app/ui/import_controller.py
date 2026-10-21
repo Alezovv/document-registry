@@ -35,9 +35,46 @@ class ImportController(QObject):
         self.parent_widget = parent
         self.dialog: ImportDocumentDialog | None = None
         self.review_dialog: RequestDialog | None = None
+        self.active_dialog: RequestDialog | None = None
         self._review_context: dict | None = None
+        self._is_closing: bool = False
+
+    def close_active_dialogs(self) -> None:
+        self._is_closing = True
+        if self.review_dialog is not None:
+            dlg = self.review_dialog
+            self.review_dialog = None
+            if hasattr(dlg, "force_close"):
+                dlg.force_close()
+            else:
+                dlg.reject()
+        if self.active_dialog is not None:
+            dlg = self.active_dialog
+            self.active_dialog = None
+            if hasattr(dlg, "force_close"):
+                dlg.force_close()
+            else:
+                dlg.reject()
+        if self.dialog is not None:
+            dlg = self.dialog
+            self.dialog = None
+            if hasattr(dlg, "stop_workers_and_wait"):
+                dlg.stop_workers_and_wait(3000)
+            else:
+                dlg._closing = True
+                dlg._cancel_requested = True
+                dlg._request_stop_and_close()
+            dlg.reject()
 
     def open(self):
+        if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
+            return
+        try:
+            from app.import_workers import warmup_ocr_engine_async
+            warmup_ocr_engine_async()
+        except Exception:
+            pass
+
         if self.review_dialog is not None:
             # One parsed document is waiting for an operator decision. Keep the
             # queue paused, but never block navigation in the main window.
@@ -51,13 +88,16 @@ class ImportController(QObject):
             self.dialog.restore_from_background()
             return
 
-        cache_dir = Path(self.documents_dir_getter()).parent / "parser_cache"
+        from app.app_paths import get_app_paths
+        cache_dir = get_app_paths().data / "parser_cache"
         dialog = ImportDocumentDialog(
             self.parent_widget,
             cache_dir=cache_dir,
             preflight_callback=self._preflight_document,
         )
         self.dialog = dialog
+        if self.parent_widget is not None and hasattr(self.parent_widget, "register_dialog"):
+            self.parent_widget.register_dialog(dialog)
         dialog.request_ready.connect(self._review_and_save)
         dialog.notice.connect(self.toast_requested.emit)
         dialog.backgrounded.connect(
@@ -71,13 +111,10 @@ class ImportController(QObject):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
-        try:
-            from app.import_workers import warmup_ocr_engine_async
-            warmup_ocr_engine_async()
-        except Exception:
-            pass
 
     def _on_dialog_finished(self, _result):
+        if self.dialog is not None and self.parent_widget is not None and hasattr(self.parent_widget, "unregister_dialog"):
+            self.parent_widget.unregister_dialog(self.dialog)
         self.dialog = None
         self.finished.emit()
 
@@ -116,23 +153,101 @@ class ImportController(QObject):
         return action, sha256
 
     def _open_existing_request(self, request) -> None:
-        try:
-            diagnostics = self.request_service.get_parser_metadata(request.id) if request.id else {}
-            dialog = RequestDialog(
-                self.parent_widget,
-                request=request,
-                documents_dir=self.documents_dir_getter(),
-                suggestions=self.request_service.get_form_suggestions(),
-                parser_diagnostics=diagnostics,
-            )
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                updated = dialog.get_request()
-                self.request_service.update_request(updated)
-                self.request_service.learn_parser_corrections(request, updated, context=diagnostics)
-                self.toast_requested.emit("Запрос обновлён", f"Запись #{updated.id} сохранена.", "success")
-        except Exception as error:
-            logger.exception("Не удалось открыть существующую запись-дубликат")
-            QMessageBox.warning(self.parent_widget, "Дубликат", f"Не удалось открыть запись:\n{error}")
+        request_to_open = request
+        force_dirty_on_reopen = False
+        while request_to_open is not None:
+            if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
+                return
+            try:
+                request_id = int(request_to_open.id)
+                diagnostics = self.request_service.get_parser_metadata(request_id) if request_id else {}
+                dup_info = self.request_service.get_request_duplicate_info(request_id) if request_id else None
+                presented_request = replace(request_to_open)
+                dialog = RequestDialog(
+                    self.parent_widget,
+                    request=request_to_open,
+                    documents_dir=self.documents_dir_getter(),
+                    suggestions=self.request_service.get_form_suggestions(),
+                    parser_diagnostics=diagnostics,
+                    duplicate_info=dup_info,
+                    request_service=self.request_service,
+                )
+                if force_dirty_on_reopen:
+                    dialog._is_dirty = True
+                    force_dirty_on_reopen = False
+                self.active_dialog = dialog
+                if self.parent_widget is not None and hasattr(self.parent_widget, "register_dialog"):
+                    self.parent_widget.register_dialog(dialog)
+                try:
+                    result = dialog.exec()
+                finally:
+                    self.active_dialog = None
+                    if self.parent_widget is not None and hasattr(self.parent_widget, "unregister_dialog"):
+                        self.parent_widget.unregister_dialog(dialog)
+                if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
+                    return
+                if result == RequestDialog.DELETE_RESULT:
+                    self.request_service.delete_request(request_id)
+                    if hasattr(self.parent_widget, "load_requests"):
+                        self.parent_widget.load_requests()
+                    self.toast_requested.emit("Запрос удалён", "Запрос успешно удалён из реестра.", "warning")
+                    return
+                if result == RequestDialog.SWITCH_REQUEST_RESULT:
+                    target_id = dialog.switch_target_request_id
+                    if target_id is None:
+                        return
+                    if dialog.switch_save_current:
+                        updated = dialog.get_request()
+                        try:
+                            self.request_service.update_request(updated)
+                            self.request_service.learn_parser_corrections(
+                                presented_request, updated, context=diagnostics
+                            )
+                            if hasattr(self.parent_widget, "load_requests"):
+                                self.parent_widget.load_requests()
+                        except Exception as error:
+                            logger.exception("Не удалось сохранить запрос перед переключением")
+                            QMessageBox.critical(
+                                self.parent_widget,
+                                "Ошибка сохранения",
+                                f"Не удалось сохранить запрос #{request_id}. Вы можете повторить сохранение.\n\n{error}",
+                            )
+                            request_to_open = updated
+                            force_dirty_on_reopen = True
+                            continue
+                    target = self.request_service.get_request(int(target_id))
+                    if target is None:
+                        QMessageBox.warning(
+                            self.parent_widget,
+                            "Запрос не найден",
+                            f"Связанный запрос #{target_id} больше не существует.",
+                        )
+                        request_to_open = self.request_service.get_request(request_id)
+                        continue
+                    request_to_open = target
+                    continue
+                if result == QDialog.DialogCode.Accepted:
+                    try:
+                        updated = dialog.get_request()
+                        self.request_service.update_request(updated)
+                        self.request_service.learn_parser_corrections(
+                            presented_request, updated, context=diagnostics
+                        )
+                        if hasattr(self.parent_widget, "load_requests"):
+                            self.parent_widget.load_requests()
+                        self.toast_requested.emit("Запрос обновлён", f"Запись #{updated.id} сохранена.", "success")
+                        return
+                    except Exception as error:
+                        logger.exception("Ошибка обновления запроса из диалога дубликата")
+                        QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось обновить запись:\n\n{error}")
+                        request_to_open = updated
+                        force_dirty_on_reopen = True
+                        continue
+                return
+            except Exception as error:
+                logger.exception("Не удалось открыть существующую запись-дубликат")
+                QMessageBox.warning(self.parent_widget, "Дубликат", f"Не удалось открыть запись:\n{error}")
+                return
 
     def _open_document(self, path: str | Path):
         try:
@@ -145,6 +260,12 @@ class ImportController(QObject):
 
     def _review_and_save(self, request, pdf_path: str):
         """Open parsed-document review without blocking the main window."""
+        if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
+            logger.info("Пропуск review: приложение закрывается")
+            if self.dialog is not None:
+                self.dialog.complete_review("skipped")
+            return
+
         if self.review_dialog is not None:
             logger.error("Получен второй запрос на review, пока предыдущий ещё открыт")
             if self.dialog is not None:
@@ -188,11 +309,14 @@ class ImportController(QObject):
                 documents_dir=self.documents_dir_getter(),
                 suggestions=suggestions,
                 parser_diagnostics=diagnostics or {},
+                request_service=self.request_service,
             )
             review.setWindowModality(Qt.WindowModality.NonModal)
             review.setModal(False)
             if self.parent_widget is not None:
                 review.setWindowIcon(self.parent_widget.windowIcon())
+                if hasattr(self.parent_widget, "register_dialog"):
+                    self.parent_widget.register_dialog(review)
 
             self.review_dialog = review
             self._review_context = {
@@ -225,49 +349,31 @@ class ImportController(QObject):
         self._review_context = None
         result_code = "skipped"
 
+        if review is not None and self.parent_widget is not None and hasattr(self.parent_widget, "unregister_dialog"):
+            self.parent_widget.unregister_dialog(review)
+
+        if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
+            if review is not None:
+                review.deleteLater()
+            return
+
         try:
+            if review is not None and result == RequestDialog.SWITCH_REQUEST_RESULT:
+                if getattr(review, "switch_save_current", False):
+                    self._save_reviewed_request(review, context)
+                    result_code = "saved"
+                target_id = getattr(review, "switch_target_request_id", None)
+                if target_id is not None:
+                    orig = self.request_service.get_request(int(target_id))
+                    if orig is not None:
+                        self._open_existing_request(orig)
+                return
+
             if review is None or result != QDialog.DialogCode.Accepted:
                 return
 
-            request = review.get_request()
-            diagnostics = context.get("diagnostics") or {}
-            ocr_text = str(context.get("ocr_text") or "")
-            allow_duplicate = bool(context.get("allow_duplicate", False))
-            pdf_path = str(context.get("pdf_path") or "")
-            presented_request = context.get("presented_request")
-
-            request._parser_diagnostics = diagnostics
-            request._allow_duplicate = allow_duplicate
-            if ocr_text:
-                request._ocr_text = ocr_text
-
-            source_changed = bool(request.source_document) and (
-                self.document_service.normalize_path(request.source_document)
-                != self.document_service.normalize_path(pdf_path)
-            )
-            if source_changed and not allow_duplicate:
-                final_duplicate = self.request_service.find_duplicate_document(
-                    request.source_document, exclude_request_id=request.id
-                )
-                if final_duplicate is not None:
-                    action = self._choose_duplicate_action(final_duplicate, initial=False)
-                    if action in {"open", "skip"}:
-                        return
-                    allow_duplicate = action == "force"
-                    request._allow_duplicate = allow_duplicate
-
-            self.request_service.create_request(request)
-            learned = self.request_service.learn_parser_corrections(
-                presented_request, request, context=diagnostics
-            )
-            if learned:
-                logger.info("Сохранено исправлений parser: %s", learned)
-
+            self._save_reviewed_request(review, context)
             result_code = "saved"
-            self.toast_requested.emit(
-                "Запрос создан", "Документ успешно добавлен в реестр.", "success"
-            )
-            logger.info("Импортирован документ %s", request.source_document)
         except Exception as error:
             result_code = "error"
             logger.exception("Ошибка сохранения импортированного документа")
@@ -284,3 +390,43 @@ class ImportController(QObject):
                 dialog.end_manual_review()
             if dialog is not None:
                 dialog.complete_review(result_code)
+
+    def _save_reviewed_request(self, review, context: dict) -> None:
+        request = review.get_request()
+        diagnostics = context.get("diagnostics") or {}
+        ocr_text = str(context.get("ocr_text") or "")
+        allow_duplicate = bool(context.get("allow_duplicate", False))
+        pdf_path = str(context.get("pdf_path") or "")
+        presented_request = context.get("presented_request")
+
+        request._parser_diagnostics = diagnostics
+        request._allow_duplicate = allow_duplicate
+        if ocr_text:
+            request._ocr_text = ocr_text
+
+        source_changed = bool(request.source_document) and (
+            self.document_service.normalize_path(request.source_document)
+            != self.document_service.normalize_path(pdf_path)
+        )
+        if source_changed and not allow_duplicate:
+            final_duplicate = self.request_service.find_duplicate_document(
+                request.source_document, exclude_request_id=request.id
+            )
+            if final_duplicate is not None:
+                action = self._choose_duplicate_action(final_duplicate, initial=False)
+                if action in {"open", "skip"}:
+                    return
+                allow_duplicate = action == "force"
+                request._allow_duplicate = allow_duplicate
+
+        self.request_service.create_request(request)
+        learned = self.request_service.learn_parser_corrections(
+            presented_request, request, context=diagnostics
+        )
+        if learned:
+            logger.info("Сохранено исправлений parser: %s", learned)
+
+        self.toast_requested.emit(
+            "Запрос создан", "Документ успешно добавлен в реестр.", "success"
+        )
+        logger.info("Импортирован документ %s", request.source_document)

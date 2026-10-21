@@ -7,6 +7,7 @@ import logging
 from pathlib import Path, PureWindowsPath
 import re
 import shutil
+import threading
 import uuid
 
 from app.database import Database
@@ -76,6 +77,7 @@ class DocumentService:
         self.documents_dir = Path(documents_dir or database.documents_dir)
         self.trash_dir = database.data_dir / "trash"
         self._hash_cache: OrderedDict[tuple[str, int, int], str] = OrderedDict()
+        self._hash_cache_lock = threading.RLock()
         self._hash_cache_limit = 512
         # Compatibility/reporting guard for the first automatic portable rebind.
         # It is intentionally process-local: the database itself stays free of
@@ -104,7 +106,8 @@ class DocumentService:
         self.clear_caches()
 
     def clear_caches(self) -> None:
-        self._hash_cache.clear()
+        with self._hash_cache_lock:
+            self._hash_cache.clear()
 
     @staticmethod
     def _canonical_existing_path(path: Path) -> Path:
@@ -292,10 +295,11 @@ class DocumentService:
             stat.st_size,
             stat.st_mtime_ns,
         )
-        cached = self._hash_cache.get(cache_key)
-        if cached is not None:
-            self._hash_cache.move_to_end(cache_key)
-            return cached
+        with self._hash_cache_lock:
+            cached = self._hash_cache.get(cache_key)
+            if cached is not None:
+                self._hash_cache.move_to_end(cache_key)
+                return cached
 
         sha256 = hashlib.sha256()
         try:
@@ -307,10 +311,14 @@ class DocumentService:
             return None
 
         digest = sha256.hexdigest()
-        self._hash_cache[cache_key] = digest
-        self._hash_cache.move_to_end(cache_key)
-        while len(self._hash_cache) > self._hash_cache_limit:
-            self._hash_cache.popitem(last=False)
+        with self._hash_cache_lock:
+            # Another thread may have calculated the same digest in parallel;
+            # replacing the same key is harmless and all OrderedDict operations
+            # remain protected.
+            self._hash_cache[cache_key] = digest
+            self._hash_cache.move_to_end(cache_key)
+            while len(self._hash_cache) > self._hash_cache_limit:
+                self._hash_cache.popitem(last=False)
         return digest
 
     def _unique_destination(self, source: Path) -> Path:

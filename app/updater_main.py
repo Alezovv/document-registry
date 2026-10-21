@@ -19,6 +19,7 @@ import time
 import zipfile
 
 from app import __version__ as UPDATER_VERSION
+from app.archive_safety import validate_archive_member_paths
 from app.db_migrations import capture_invariants, downgrade_database
 from app.text_encoding import loads_json_with_fallback
 from app.updater_status import UpdaterDisplay, UpdaterStatusReporter
@@ -79,15 +80,56 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+MAX_ARCHIVE_FILES = 15_000
+MAX_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
+MAX_ARCHIVE_SINGLE_FILE_BYTES = 500 * 1024 * 1024  # 500 MB
+
+
 def safe_extract(archive_path: Path, destination: Path) -> None:
-    root = destination.resolve()
-    dest_ext = _to_extended_path(destination)
     with zipfile.ZipFile(_to_extended_path(archive_path), "r") as archive:
-        for member in archive.infolist():
-            member_path = (destination / member.filename).resolve()
-            if member_path != root and root not in member_path.parents:
-                raise InstallError("Пакет обновления содержит небезопасный путь.")
-        archive.extractall(dest_ext)
+        members = archive.infolist()
+        if len(members) > MAX_ARCHIVE_FILES:
+            raise InstallError(
+                f"В архиве слишком много файлов ({len(members)} > {MAX_ARCHIVE_FILES})."
+            )
+        member_paths = validate_archive_member_paths(members, destination, InstallError)
+        total_size = 0
+        for member in members:
+            if member.file_size > MAX_ARCHIVE_SINGLE_FILE_BYTES:
+                raise InstallError(
+                    f"Файл '{member.filename}' в архиве превышает допустимый размер "
+                    f"({member.file_size} > {MAX_ARCHIVE_SINGLE_FILE_BYTES} байт)."
+                )
+            total_size += member.file_size
+            if total_size > MAX_ARCHIVE_TOTAL_BYTES:
+                raise InstallError(
+                    f"Общий распакованный размер архива ({total_size} байт) "
+                    f"превышает лимит ({MAX_ARCHIVE_TOTAL_BYTES} байт)."
+                )
+
+        total_extracted = 0
+        for member, member_path in zip(members, member_paths):
+            if member.is_dir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as src, open(_to_extended_path(member_path), "wb") as dst:
+                member_extracted = 0
+                while chunk := src.read(65536):
+                    member_extracted += len(chunk)
+                    total_extracted += len(chunk)
+                    if member_extracted > MAX_ARCHIVE_SINGLE_FILE_BYTES:
+                        raise InstallError(
+                            f"Файл '{member.filename}' в архиве превышает допустимый размер "
+                            f"({member_extracted} > {MAX_ARCHIVE_SINGLE_FILE_BYTES} байт)."
+                        )
+                    if total_extracted > MAX_ARCHIVE_TOTAL_BYTES:
+                        raise InstallError(
+                            f"Общий распакованный размер архива ({total_extracted} байт) "
+                            f"превышает лимит ({MAX_ARCHIVE_TOTAL_BYTES} байт)."
+                        )
+                    dst.write(chunk)
+
 
 
 def read_staged_manifest(staging: Path, expected_version: str) -> dict:
@@ -371,10 +413,32 @@ def _recover_interrupted_rollback(target: Path) -> bool:
 def _checkpoint_database(database: Path) -> None:
     db_ext = _to_extended_path(database)
     if not os.path.isfile(db_ext):
+        sidecars = [Path(str(database) + suffix) for suffix in ("-wal", "-shm")]
+        if any(os.path.exists(_to_extended_path(path)) for path in sidecars):
+            raise InstallError(
+                "Основной файл БД отсутствует, но остались WAL/SHM-файлы. "
+                "Обновление остановлено, чтобы не потерять данные."
+            )
         return
     try:
         with closing(sqlite3.connect(db_ext, timeout=30.0)) as conn:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint and int(checkpoint[0]) != 0:
+                raise InstallError(
+                    "Не удалось полностью выполнить checkpoint WAL рабочей базы. "
+                    "Обновление остановлено; файлы базы не заменялись."
+                )
+            # A successful checkpoint alone is not enough if another process can
+            # still use the WAL. Switching journal mode must succeed before the
+            # activation path removes sidecar files or replaces the main DB.
+            mode = conn.execute("PRAGMA journal_mode = DELETE").fetchone()
+            if mode and str(mode[0]).lower() != "delete":
+                raise InstallError(
+                    "Не удалось безопасно переключить рабочую БД из WAL-режима. "
+                    "Обновление остановлено; файлы базы не заменялись."
+                )
+    except InstallError:
+        raise
     except sqlite3.Error as error:
         raise InstallError(f"Не удалось подготовить БД к резервному копированию: {error}") from error
 
@@ -828,9 +892,33 @@ def _activate_database(candidate: Path | None, target: Path, rollback: Path) -> 
     _checkpoint_database(database)
     for suffix in ("-wal", "-shm"):
         _remove_path(Path(str(database) + suffix))
-    if os.path.exists(_to_extended_path(database)):
-        _move_if_exists(database, rollback / "database" / "requests.db")
-    shutil.move(_to_extended_path(candidate), _to_extended_path(database))
+
+    saved_database = rollback / "database" / "requests.db"
+    moved_old_database = False
+    try:
+        if os.path.exists(_to_extended_path(database)):
+            _move_if_exists(database, saved_database)
+            moved_old_database = saved_database.is_file()
+        shutil.move(_to_extended_path(candidate), _to_extended_path(database))
+    except Exception:
+        # This helper can fail after it has moved the live DB aside but before
+        # the caller receives ``True``. Restore it here so the caller's
+        # database_swapped flag is not the sole protection against data loss.
+        if moved_old_database and saved_database.is_file():
+            try:
+                # If a failed cross-volume move left a partial destination, remove
+                # that incomplete file before returning the saved live DB.
+                if database.exists():
+                    _remove_path(database)
+                if database.exists():
+                    raise OSError("Не удалось удалить частичный файл новой БД")
+                shutil.move(_to_extended_path(saved_database), _to_extended_path(database))
+            except Exception as rollback_error:
+                raise InstallError(
+                    "Не удалось установить новую БД и вернуть прежнюю рабочую БД. "
+                    f"Прежняя база сохранена в {saved_database}: {rollback_error}"
+                ) from rollback_error
+        raise
     return True
 
 
@@ -1005,7 +1093,16 @@ def _install_update_impl(
             _rollback_program(target, rollback)
         except Exception:
             logger.exception("Ошибка отката файлов программы")
-        _remove_path(rollback)
+        saved_database = rollback / "database" / "requests.db"
+        if saved_database.is_file():
+            # Do not delete the rollback directory if a database recovery failed.
+            # Keep the last verified database copy available for manual recovery.
+            logger.critical(
+                "Предыдущая база сохранена для ручного восстановления: %s",
+                saved_database,
+            )
+        else:
+            _remove_path(rollback)
         _restart_application(target)
         raise
     finally:
@@ -1162,12 +1259,20 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     requested_version = str(args.version or "").strip()
-    if requested_version != str(UPDATER_VERSION) and not args.rollback:
-        show_error(
-            "Версия updater не совпадает с версией пакета: "
-            f"updater={UPDATER_VERSION}, package={requested_version}. Установка отменена."
+    if requested_version != str(UPDATER_VERSION):
+        req_tuple = _parse_version_tuple(requested_version)
+        upd_tuple = _parse_version_tuple(str(UPDATER_VERSION))
+        is_valid_rollback = bool(
+            args.rollback
+            and req_tuple is not None
+            and (upd_tuple is None or req_tuple <= upd_tuple)
         )
-        return 4
+        if not is_valid_rollback:
+            show_error(
+                "Версия updater не совпадает с версией пакета: "
+                f"updater={UPDATER_VERSION}, package={requested_version}. Установка отменена."
+            )
+            return 4
 
     try:
         install_update(

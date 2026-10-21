@@ -595,3 +595,12 @@ class UpdateController(QObject):
         if self._prepare_thread is not None:
             self._prepare_thread.deleteLater()
             self._prepare_thread = None
+
+    def stop(self) -> None:
+        """Safely interrupt and wait for any background updater threads."""
+        for t in (self._check_thread, self._rollback_check_thread, self._prepare_thread):
+            if t is not None and t.isRunning():
+                t.requestInterruption()
+                t.wait(1500)
+        self._close_progress_dialog()
+

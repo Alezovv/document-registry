@@ -1,6 +1,6 @@
 import logging
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QStackedWidget, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QMainWindow, QMessageBox, QStackedWidget, QWidget
 from app.app_paths import get_app_paths
 from app.backup_service import BackupService
 from app.database import Database
@@ -13,7 +13,7 @@ from app.request_service import RequestService
 from app.performance_mode_service import apply_performance_mode
 from app.portable_paths import absolute_without_resolving
 from app.performance_diagnostics import PerformanceDiagnostics
-from app.settings_service import AppSettings, SettingsService
+from app.settings_service import AppSettings, SettingsService, VALID_PAGES
 from app.ui.search_index_controller import SearchIndexController
 from app.ui.backup_controller import BackupController
 from app.ui.document_controller import DocumentController
@@ -32,8 +32,9 @@ from app.ui.settings_page import SettingsPage
 from app.ui.styles import APP_STYLE
 from app.ui.toast import ToastNotification
 from app.ui.update_window_mixin import UpdateWindowMixin
+from app.ui.window_lifecycle_mixin import WindowLifecycleMixin
 logger = logging.getLogger(__name__)
-class MainWindow(UpdateWindowMixin, QMainWindow):
+class MainWindow(UpdateWindowMixin, WindowLifecycleMixin, QMainWindow):
     """Application shell.
     Pages own presentation state; controllers own user actions; services own
     business/filesystem/database behavior. MainWindow only wires them together.
@@ -79,12 +80,16 @@ class MainWindow(UpdateWindowMixin, QMainWindow):
             self.show_toast,
             lambda: self.settings_page,
         )
-        self.current_page = "registry"
+        initial_page = getattr(self.settings, "last_page", "registry") or "registry"
+        if initial_page not in VALID_PAGES:
+            initial_page = "registry"
+        self.current_page = initial_page
         self.page_widgets: dict[str, QWidget] = {}
         self.registry_page: RegistryPage | None = None
         self.documents_page: DocumentsPage | None = None
         self.history_page: HistoryPage | None = None
         self.settings_page: SettingsPage | None = None
+        self._init_lifecycle()
         self._create_controllers()
         self.data_health_monitor = DataHealthMonitor(self.database, self.backup_service, self)
         self.data_health_monitor.warning.connect(self.show_toast)
@@ -274,6 +279,8 @@ class MainWindow(UpdateWindowMixin, QMainWindow):
         )
 
     def _maybe_auto_backup(self):
+        if getattr(self, "_is_closing", False):
+            return
         try:
             started = self.backup_controller.maybe_create_auto_backup(
                 self.auto_backup_path,

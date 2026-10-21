@@ -134,7 +134,14 @@ class BackupController(QObject):
             self.parent_widget.setEnabled(False)
         self.worker.start(QThread.Priority.LowPriority)
 
+    def stop(self) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(2000)
+
     def _success(self, operation: str, result):
+        if self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False):
+            return
         if operation == "create":
             self.toast_requested.emit(
                 "Резервная копия создана",
@@ -156,6 +163,8 @@ class BackupController(QObject):
             )
 
     def _failure(self, message: str):
+        if self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False):
+            return
         QMessageBox.critical(self.parent_widget, "Ошибка резервной копии", message)
 
     def _finished(self):

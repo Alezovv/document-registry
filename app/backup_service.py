@@ -3,14 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
 import zipfile
 
+from app.archive_safety import validate_archive_member_paths
 from app.database import Database
+from app.db_migrations import CURRENT_SCHEMA_VERSION, migrate_database
 from app.document_service import DocumentService
+from app.updater_main import (
+    MAX_ARCHIVE_FILES,
+    MAX_ARCHIVE_TOTAL_BYTES,
+    MAX_ARCHIVE_SINGLE_FILE_BYTES,
+)
+
 
 
 BACKUP_FORMAT_VERSION = 1
@@ -68,8 +77,21 @@ class BackupService:
             return None
         return max(0, (datetime.now(timezone.utc) - modified).days)
 
-    def create_backup(self, destination: str | Path) -> BackupResult:
-        destination = Path(destination).expanduser().resolve(strict=False)
+    @property
+    def default_backups_dir(self) -> Path:
+        data_dir = Path(self.database.db_path).parent
+        if data_dir.name.lower() == "data":
+            return (data_dir.parent / "backups").resolve()
+        return (data_dir / "backups").resolve()
+
+    def create_backup(
+        self, destination: str | Path, *, update_health: bool = True
+    ) -> BackupResult:
+        dest_path = Path(destination).expanduser()
+        if not dest_path.is_absolute():
+            destination = (self.default_backups_dir / dest_path).resolve(strict=False)
+        else:
+            destination = dest_path.resolve(strict=False)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.suffix.lower() != ".zip":
             destination = destination.with_suffix(".zip")
@@ -95,7 +117,14 @@ class BackupService:
                 "documents_dir_name": "documents",
             }
 
-            temp_zip = destination.with_name(f".{destination.name}.tmp")
+            # Use a unique temporary file in the destination directory. A fixed
+            # ``.tmp`` name lets concurrent manual/automatic backups overwrite
+            # each other's in-progress ZIP archives.
+            temp_fd, temp_name = tempfile.mkstemp(
+                prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+            )
+            os.close(temp_fd)
+            temp_zip = Path(temp_name)
             try:
                 with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
                     archive.write(db_snapshot, "database/requests.db")
@@ -104,7 +133,7 @@ class BackupService:
                         archive.write(path, f"documents/{path.name}")
                     for path in trash_paths:
                         relative = path.relative_to(self.documents.trash_dir)
-                        archive.write(path, str(Path("trash") / relative))
+                        archive.write(path, (Path("trash") / relative).as_posix())
                 temp_zip.replace(destination)
             except Exception as error:
                 temp_zip.unlink(missing_ok=True)
@@ -126,17 +155,31 @@ class BackupService:
             verified=True,
             verified_at=verified_at,
         )
-        self._write_health(result)
+        if update_health:
+            self._write_health(result)
         return result
 
     def inspect_backup(self, backup_path: str | Path) -> dict:
         path = Path(backup_path).expanduser().resolve(strict=False)
         try:
             with zipfile.ZipFile(path, "r") as archive:
-                names = set(archive.namelist())
+                members = archive.infolist()
+                if len(members) > MAX_ARCHIVE_FILES:
+                    raise BackupError(
+                        f"В архиве резервной копии слишком много файлов ({len(members)} > {MAX_ARCHIVE_FILES})."
+                    )
+                names = {info.filename for info in members}
                 if "manifest.json" not in names or "database/requests.db" not in names:
                     raise BackupError("Архив не является резервной копией этого приложения.")
-                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+                manifest_info = archive.getinfo("manifest.json")
+                max_manifest_bytes = 5 * 1024 * 1024
+                if manifest_info.file_size > max_manifest_bytes:
+                    raise BackupError("Манифест резервной копии превышает допустимый размер.")
+                with archive.open("manifest.json", "r") as mf:
+                    manifest_bytes = mf.read(max_manifest_bytes + 1)
+                if len(manifest_bytes) > max_manifest_bytes:
+                    raise BackupError("Манифест резервной копии превышает допустимый размер.")
+                manifest = json.loads(manifest_bytes.decode("utf-8"))
                 if int(manifest.get("format_version", 0)) != BACKUP_FORMAT_VERSION:
                     raise BackupError("Версия резервной копии не поддерживается.")
                 return manifest
@@ -151,10 +194,49 @@ class BackupService:
         manifest = self.inspect_backup(path)
         try:
             with zipfile.ZipFile(path, "r") as archive:
-                bad_member = archive.testzip()
-                if bad_member:
-                    raise BackupError(f"Архив повреждён: {bad_member}")
-                files = [info.filename for info in archive.infolist() if not info.is_dir()]
+                members = archive.infolist()
+                if len(members) > MAX_ARCHIVE_FILES:
+                    raise BackupError(
+                        f"В архиве резервной копии слишком много файлов ({len(members)} > {MAX_ARCHIVE_FILES})."
+                    )
+                declared_total = 0
+                for member in members:
+                    if member.file_size > MAX_ARCHIVE_SINGLE_FILE_BYTES:
+                        raise BackupError(
+                            f"Файл '{member.filename}' в архиве превышает допустимый размер "
+                            f"({member.file_size} > {MAX_ARCHIVE_SINGLE_FILE_BYTES} байт)."
+                        )
+                    declared_total += member.file_size
+                    if declared_total > MAX_ARCHIVE_TOTAL_BYTES:
+                        raise BackupError(
+                            f"Общий распакованный размер архива ({declared_total} байт) "
+                            f"превышает лимит ({MAX_ARCHIVE_TOTAL_BYTES} байт)."
+                        )
+                # Bounded stream verification (replaces unbounded testzip() to prevent Zip-bomb DoS)
+                total_verified = 0
+                for member in members:
+                    if member.is_dir():
+                        continue
+                    member_read = 0
+                    try:
+                        with archive.open(member, "r") as src:
+                            while chunk := src.read(65536):
+                                member_read += len(chunk)
+                                total_verified += len(chunk)
+                                if member_read > MAX_ARCHIVE_SINGLE_FILE_BYTES:
+                                    raise BackupError(
+                                        f"Файл '{member.filename}' в архиве превышает допустимый размер "
+                                        f"({member_read} > {MAX_ARCHIVE_SINGLE_FILE_BYTES} байт)."
+                                    )
+                                if total_verified > MAX_ARCHIVE_TOTAL_BYTES:
+                                    raise BackupError(
+                                        f"Общий распакованный размер архива ({total_verified} байт) "
+                                        f"превышает лимит ({MAX_ARCHIVE_TOTAL_BYTES} байт)."
+                                    )
+                    except (zipfile.BadZipFile, OSError) as crc_err:
+                        raise BackupError(f"Архив повреждён: {member.filename} ({crc_err})") from crc_err
+
+                files = [info.filename for info in members if not info.is_dir()]
                 document_count = sum(1 for name in files if name.startswith("documents/"))
                 trash_count = sum(1 for name in files if name.startswith("trash/"))
                 expected_documents = int(manifest.get("document_count", 0) or 0)
@@ -169,9 +251,14 @@ class BackupService:
                     )
                 with tempfile.TemporaryDirectory(prefix="registry_backup_verify_") as temp_dir_name:
                     db_path = Path(temp_dir_name) / "requests.db"
-                    # Stream only the embedded DB to disk; do not load it into RAM.
+                    # Stream only the embedded DB to disk with size enforcement.
+                    db_written = 0
                     with archive.open("database/requests.db", "r") as source, db_path.open("wb") as target:
-                        shutil.copyfileobj(source, target, length=1024 * 1024)
+                        while chunk := source.read(65536):
+                            db_written += len(chunk)
+                            if db_written > MAX_ARCHIVE_SINGLE_FILE_BYTES:
+                                raise BackupError("База данных в архиве превышает допустимый размер.")
+                            target.write(chunk)
                     self._validate_database(db_path)
         except BackupError:
             raise
@@ -211,7 +298,20 @@ class BackupService:
                 raise BackupError(f"Не удалось распаковать резервную копию: {error}") from error
 
             incoming_db = extracted / "database" / "requests.db"
-            self._validate_database(incoming_db)
+            incoming_schema = self._validate_database(incoming_db)
+            if incoming_schema > CURRENT_SCHEMA_VERSION:
+                raise BackupError(
+                    f"Резервная копия создана в более новой версии программы (схема {incoming_schema} > {CURRENT_SCHEMA_VERSION}). "
+                    "Обновите программу перед восстановлением."
+                )
+            if incoming_schema < CURRENT_SCHEMA_VERSION:
+                try:
+                    migrate_database(incoming_db, target_schema=CURRENT_SCHEMA_VERSION)
+                except Exception as error:
+                    raise BackupError(
+                        f"Не удалось обновить схему базы данных из резервной копии ({incoming_schema} -> {CURRENT_SCHEMA_VERSION}): {error}"
+                    ) from error
+                self._validate_database(incoming_db)
 
             rollback = temp_dir / "rollback"
             rollback.mkdir()
@@ -276,15 +376,36 @@ class BackupService:
             "document_count": int(result.document_count),
             "trash_count": int(result.trash_count),
         }
+        temp: Path | None = None
+        temp_fd: int | None = None
         try:
             self.health_path.parent.mkdir(parents=True, exist_ok=True)
-            temp = self.health_path.with_suffix(".tmp")
-            temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_fd, temp_name = tempfile.mkstemp(
+                prefix=f".{self.health_path.name}.", suffix=".tmp", dir=self.health_path.parent
+            )
+            temp = Path(temp_name)
+            with os.fdopen(temp_fd, "w", encoding="utf-8", newline="\n") as stream:
+                temp_fd = None  # fdopen now owns and closes the descriptor
+                json.dump(payload, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
             temp.replace(self.health_path)
         except OSError:
             # Backup is already valid; inability to persist informational health
             # metadata must not turn it into a failed backup.
             pass
+        finally:
+            if temp_fd is not None:
+                try:
+                    os.close(temp_fd)
+                except OSError:
+                    pass
+            if temp is not None:
+                try:
+                    temp.unlink(missing_ok=True)
+                except OSError:
+                    # Health metadata is best-effort; leave an orphaned temp file
+                    # rather than turning a verified backup into a failure.
+                    pass
 
     def _snapshot_database(self, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -300,7 +421,7 @@ class BackupService:
             raise BackupError(f"Не удалось создать снимок базы данных: {error}") from error
 
     @staticmethod
-    def _validate_database(path: Path) -> None:
+    def _validate_database(path: Path) -> int:
         if not path.is_file():
             raise BackupError("В резервной копии отсутствует база данных.")
         try:
@@ -312,18 +433,79 @@ class BackupService:
                 tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 if "requests" not in tables or "request_history" not in tables:
                     raise BackupError("В резервной базе нет обязательных таблиц.")
+                version_row = conn.execute("PRAGMA user_version").fetchone()
+                return int(version_row[0]) if version_row else 0
             finally:
                 conn.close()
         except sqlite3.Error as error:
             raise BackupError(f"Резервная база данных повреждена: {error}") from error
 
     def _replace_database(self, source: Path) -> None:
-        self.database.db_path.parent.mkdir(parents=True, exist_ok=True)
-        for suffix in ("-wal", "-shm"):
-            Path(str(self.database.db_path) + suffix).unlink(missing_ok=True)
-        temp_target = self.database.db_path.with_name(f".{self.database.db_path.name}.restore")
-        shutil.copy2(source, temp_target)
-        temp_target.replace(self.database.db_path)
+        """Restore a validated SQLite snapshot without deleting live WAL files.
+
+        When the database already exists, SQLite's online backup API updates it
+        transactionally. If that operation fails (for example, because another
+        connection holds a lock), do not fall back to deleting ``-wal``/``-shm``
+        and replacing the file underneath those connections. A missing database
+        is installed through a validated same-directory temporary file.
+        """
+        live_db = Path(self.database.db_path)
+        live_db.parent.mkdir(parents=True, exist_ok=True)
+        if not source.is_file():
+            raise BackupError("Не найден файл базы данных для восстановления.")
+
+        if live_db.exists() and not live_db.is_file():
+            raise BackupError("Путь рабочей базы данных занят не файлом.")
+
+        if live_db.is_file():
+            source_conn = None
+            target_conn = None
+            try:
+                source_conn = sqlite3.connect(source, timeout=10.0)
+                target_conn = sqlite3.connect(live_db, timeout=15.0)
+                target_conn.execute("PRAGMA busy_timeout = 10000")
+                source_conn.backup(target_conn)
+            except sqlite3.Error as error:
+                raise BackupError(
+                    "Не удалось безопасно восстановить рабочую базу данных: "
+                    f"{error}. Служебные файлы WAL/SHM не удалялись."
+                ) from error
+            finally:
+                if target_conn is not None:
+                    target_conn.close()
+                if source_conn is not None:
+                    source_conn.close()
+
+            # Verify the effective database after closing the destination handle;
+            # in WAL mode SQLite will read committed pages from its WAL as needed.
+            self._validate_database(live_db)
+            return
+
+        # If the main DB is missing while WAL/SHM sidecars remain, do not guess
+        # whether another process still owns them. Stop without destroying them.
+        sidecars = [Path(str(live_db) + suffix) for suffix in ("-wal", "-shm")]
+        if any(path.exists() for path in sidecars):
+            raise BackupError(
+                "Основной файл базы отсутствует, но остались WAL/SHM-файлы. "
+                "Восстановление остановлено, чтобы не повредить данные."
+            )
+
+        temp_fd, temp_name = tempfile.mkstemp(
+            prefix=f".{live_db.name}.", suffix=".restore", dir=live_db.parent
+        )
+        os.close(temp_fd)
+        temp_target = Path(temp_name)
+        try:
+            shutil.copy2(source, temp_target)
+            self._validate_database(temp_target)
+            temp_target.replace(live_db)
+        except Exception as error:
+            raise BackupError(f"Не удалось установить резервную базу данных: {error}") from error
+        finally:
+            try:
+                temp_target.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @staticmethod
     def _replace_file(source: Path, target: Path) -> None:
@@ -334,22 +516,90 @@ class BackupService:
 
     @staticmethod
     def _replace_directory(source: Path, target: Path) -> None:
+        """Stage a directory and swap it in without deleting the live copy first.
+
+        If the second rename fails, restore the old directory. This also avoids
+        partially deleting a directory when a file is locked by another process.
+        """
+        target.parent.mkdir(parents=True, exist_ok=True)
         staged = target.with_name(f".{target.name}.restore")
+        previous = target.with_name(f".{target.name}.previous")
+        # Recover the only remaining copy if a previous process crashed between
+        # renaming the live directory aside and installing the staged directory.
+        # Never delete ``.previous`` while the live target is missing.
+        if previous.exists():
+            if not target.exists():
+                previous.replace(target)
+            else:
+                shutil.rmtree(previous)
         if staged.exists():
             shutil.rmtree(staged)
         if source.exists():
             shutil.copytree(source, staged)
         else:
             staged.mkdir(parents=True)
-        if target.exists():
-            shutil.rmtree(target)
-        staged.replace(target)
+
+        moved_old = False
+        try:
+            if target.exists():
+                target.replace(previous)
+                moved_old = True
+            staged.replace(target)
+        except Exception:
+            if moved_old and previous.exists() and not target.exists():
+                previous.replace(target)
+            raise
+        else:
+            if previous.exists():
+                # The new directory is already installed; a locked file in the
+                # old directory must not turn a successful swap into a failure.
+                shutil.rmtree(previous, ignore_errors=True)
+        finally:
+            if staged.exists():
+                shutil.rmtree(staged, ignore_errors=True)
 
     @staticmethod
     def _safe_extract(archive: zipfile.ZipFile, destination: Path) -> None:
-        root = destination.resolve()
-        for member in archive.infolist():
-            member_path = (destination / member.filename).resolve()
-            if root not in member_path.parents and member_path != root:
-                raise BackupError("В архиве обнаружен небезопасный путь.")
-        archive.extractall(destination)
+        members = archive.infolist()
+        if len(members) > MAX_ARCHIVE_FILES:
+            raise BackupError(
+                f"В архиве резервной копии слишком много файлов ({len(members)} > {MAX_ARCHIVE_FILES})."
+            )
+        member_paths = validate_archive_member_paths(members, destination, BackupError)
+        total_size = 0
+        for member in members:
+            if member.file_size > MAX_ARCHIVE_SINGLE_FILE_BYTES:
+                raise BackupError(
+                    f"Файл '{member.filename}' в архиве превышает допустимый размер "
+                    f"({member.file_size} > {MAX_ARCHIVE_SINGLE_FILE_BYTES} байт)."
+                )
+            total_size += member.file_size
+            if total_size > MAX_ARCHIVE_TOTAL_BYTES:
+                raise BackupError(
+                    f"Общий распакованный размер архива ({total_size} байт) "
+                    f"превышает лимит ({MAX_ARCHIVE_TOTAL_BYTES} байт)."
+                )
+
+        total_extracted = 0
+        for member, member_path in zip(members, member_paths):
+            if member.is_dir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as src, open(member_path, "wb") as dst:
+                member_extracted = 0
+                while chunk := src.read(65536):
+                    member_extracted += len(chunk)
+                    total_extracted += len(chunk)
+                    if member_extracted > MAX_ARCHIVE_SINGLE_FILE_BYTES:
+                        raise BackupError(
+                            f"Файл '{member.filename}' в архиве превышает допустимый размер "
+                            f"({member_extracted} > {MAX_ARCHIVE_SINGLE_FILE_BYTES} байт)."
+                        )
+                    if total_extracted > MAX_ARCHIVE_TOTAL_BYTES:
+                        raise BackupError(
+                            f"Общий распакованный размер архива ({total_extracted} байт) "
+                            f"превышает лимит ({MAX_ARCHIVE_TOTAL_BYTES} байт)."
+                        )
+                    dst.write(chunk)
+

@@ -62,6 +62,9 @@ class RegistryPage(QWidget):
         self._page_offset = 0
         self._total_matching = 0
         self._manual_requests_mode = False
+        self._duplicate_map_cache: dict[int, dict] | None = None
+        self._registry_counts_cache: dict[str, int] | None = None
+        self._registry_counts_cache_day = ""
 
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
@@ -137,8 +140,10 @@ class RegistryPage(QWidget):
             "QPushButton:hover { background: #F8FAFC; border-color: #94A3B8; color:#1D4ED8; }"
         )
         export_button.clicked.connect(
-            lambda: self.export_requested.emit(list(self._last_filtered))
+            lambda: self.export_requested.emit(self.get_filter_snapshot_fetcher())
         )
+
+
         header.addWidget(export_button)
 
         return header
@@ -525,21 +530,37 @@ class RegistryPage(QWidget):
     def refresh(self):
         self._manual_requests_mode = False
         self._page_offset = 0
+        # Data may have changed outside the current filter (e.g. a request was
+        # edited or removed), so the duplicate summary must be refreshed.
+        self._duplicate_map_cache = None
+        self._registry_counts_cache = None
+        self._registry_counts_cache_day = ""
         self._load_page(reset=True)
 
     def set_requests(self, requests):
         """Compatibility path for tests/legacy callers that provide rows directly."""
         self._manual_requests_mode = True
         self.requests = list(requests)
+        self._duplicate_map_cache = None
+        self._registry_counts_cache = None
+        self._registry_counts_cache_day = ""
         self._rebuild_filter_cache()
         self.update_statistics()
         self._apply_filters_in_memory()
 
-    def _rebuild_filter_cache(self):
-        cache: dict[int, dict[str, object]] = {}
-        counts: Counter[str] = Counter()
-        for request in self.requests:
-            date = QDate.fromString(request.received_date, "dd.MM.yyyy")
+    def _rebuild_filter_cache(self, requests=None, *, reset: bool = True):
+        """Build the filter cache, optionally extending it for newly loaded rows."""
+        if reset:
+            cache: dict[int, dict[str, object]] = {}
+            counts: Counter[str] = Counter()
+        else:
+            cache = self._filter_cache
+            counts = self._status_counts
+        for request in self.requests if requests is None else requests:
+            key = id(request)
+            if key in cache:
+                continue
+            received = QDate.fromString(request.received_date, "dd.MM.yyyy")
             due_date = QDate.fromString(request.due_date, "dd.MM.yyyy")
             display_status = request.display_status()
             values = {
@@ -554,18 +575,16 @@ class RegistryPage(QWidget):
                 "note": str(request.note or "").casefold(),
                 "status": str(display_status or "").casefold(),
             }
-            cache[id(request)] = {
-                "date": date.toJulianDay() if date.isValid() else 0,
+            cache[key] = {
+                "date": received.toJulianDay() if received.isValid() else 0,
                 "due": due_date.toJulianDay() if due_date.isValid() else 0,
                 "display_status": display_status,
                 "from_text": "\n".join(
-                    part
-                    for part in (
+                    part for part in (
                         request.from_department,
                         request.from_position,
                         request.from_person,
-                    )
-                    if part
+                    ) if part
                 ),
                 **values,
             }
@@ -573,12 +592,28 @@ class RegistryPage(QWidget):
         self._filter_cache = cache
         self._status_counts = counts
 
+    def _get_duplicate_map_cached(self) -> dict[int, dict]:
+        if self._duplicate_map_cache is None:
+            try:
+                self._duplicate_map_cache = self.request_service.get_duplicate_map()
+            except Exception:
+                self._duplicate_map_cache = {}
+        return self._duplicate_map_cache
+
     def update_statistics(self):
         if not self._manual_requests_mode:
-            try:
-                counts = self.request_service.get_registry_status_counts()
-            except Exception:
-                counts = {}
+            today_key = QDate.currentDate().toString("yyyy-MM-dd")
+            if (
+                self._registry_counts_cache is None
+                or self._registry_counts_cache_day != today_key
+            ):
+                try:
+                    counts = self.request_service.get_registry_status_counts()
+                except Exception:
+                    counts = {}
+                self._registry_counts_cache = counts or None
+                self._registry_counts_cache_day = today_key if counts else ""
+            counts = self._registry_counts_cache or {}
             if counts:
                 self.total_value.setText(str(counts.get("total", 0)))
                 self.new_value.setText(str(counts.get("Новый", 0)))
@@ -626,20 +661,19 @@ class RegistryPage(QWidget):
             card.style().polish(card)
             card.update()
 
-    def display_requests(self, requests):
+    def display_requests(self, requests, *, append: bool = False):
         has_rows = bool(requests)
         self.table.setVisible(has_rows)
         if hasattr(self, "empty_label"):
             self.empty_label.setVisible(not has_rows)
         self.table.setUpdatesEnabled(False)
-        duplicate_map: dict[int, dict] = {}
+        duplicate_map = self._get_duplicate_map_cached()
         try:
-            duplicate_map = self.request_service.get_duplicate_map()
-        except Exception:
-            pass
-        try:
+            previous_row_count = self.table.rowCount()
+            start_row = previous_row_count if append and previous_row_count <= len(requests) else 0
             self.table.setRowCount(len(requests))
-            for row_index, request in enumerate(requests):
+            for row_index in range(start_row, len(requests)):
+                request = requests[row_index]
                 cached = self._filter_cache.get(id(request), {})
                 from_text = str(cached.get("from_text", ""))
 
@@ -744,6 +778,7 @@ class RegistryPage(QWidget):
                 sort_ascending=self.sort_ascending,
                 limit=self._page_size,
                 offset=0 if reset else self._page_offset,
+                include_total=reset,
             )
         except Exception:
             # Keep the registry usable if a migration/custom SQLite build cannot
@@ -758,29 +793,45 @@ class RegistryPage(QWidget):
 
         if reset:
             self.requests = list(page)
+            new_requests = list(page)
+            self._search_snippets = {}
+            self._rebuild_filter_cache(reset=True)
         else:
             known = {request.id for request in self.requests}
-            self.requests.extend(request for request in page if request.id not in known)
-        self._total_matching = int(total)
-        self._rebuild_filter_cache()
-        self.update_statistics()
+            new_requests = [request for request in page if request.id not in known]
+            self.requests.extend(new_requests)
+            self._rebuild_filter_cache(new_requests, reset=False)
+        if total is not None:
+            self._total_matching = int(total)
+        if reset or self._registry_counts_cache_day != QDate.currentDate().toString("yyyy-MM-dd"):
+            # Status cards describe the whole registry, not the visible page.
+            # Refresh on the first action after midnight so overdue counts stay current.
+            self.update_statistics()
 
-        self._search_snippets = {}
         search_raw = self.search_input.text().strip()
-        if search_raw and self.search_field.currentText() == "Все поля":
+        if search_raw and self.search_field.currentText() == "Все поля" and new_requests:
             try:
-                current_ids = {int(request.id) for request in self.requests if request.id is not None}
-                hits = self.request_service.search_request_hits_full_text(search_raw, limit=min(2000, max(self._page_size * 4, 500)))
-                self._search_snippets = {
-                    int(hit["request_id"]): str(hit.get("snippet", "") or "")
-                    for hit in hits
-                    if int(hit["request_id"]) in current_ids and str(hit.get("snippet", "") or "").strip()
-                }
+                page_ids = {int(request.id) for request in new_requests if request.id is not None}
+                if page_ids:
+                    hits = self.request_service.search_request_hits_full_text(
+                        search_raw,
+                        limit=min(2000, max(len(page_ids), self._page_size)),
+                        request_ids=page_ids,
+                    )
+                    self._search_snippets.update({
+                        int(hit["request_id"]): str(hit.get("snippet", "") or "")
+                        for hit in hits
+                        if int(hit["request_id"]) in page_ids
+                        and str(hit.get("snippet", "") or "").strip()
+                    })
             except Exception:
-                self._search_snippets = {}
+                # Preserve snippets already calculated for earlier pages.
+                pass
+        elif reset:
+            self._search_snippets = {}
 
         self._last_filtered = list(self.requests)
-        self.display_requests(self.requests)
+        self.display_requests(self.requests, append=not reset)
         shown = len(self.requests)
         self.search_count_label.setText(f"Показано: {shown} из {self._total_matching}")
         self.paging_label.setText(f"Загружено {shown} из {self._total_matching}")
@@ -836,20 +887,24 @@ class RegistryPage(QWidget):
         dup_map = None
         if is_dup_filter or (search_text and is_dup_search and selected_field in ("Все поля", "Статус")):
             try:
-                dup_map = self.request_service.get_duplicate_map()
+                dup_map = self._get_duplicate_map_cached()
             except Exception:
                 dup_map = {}
 
         filtered = []
         for request in self.requests:
             if selected_status == "Активные":
-                if request.status in ("Исполнен", "Отклонен"):
+                if request.status in ("Исполнен", "Отклонен", "Отклонён"):
                     continue
             elif selected_status in ("Дубликат", "Дубликаты"):
                 if not dup_map or request.id not in dup_map:
                     continue
-            elif selected_status != "Все статусы" and request.display_status() != selected_status:
-                continue
+            elif selected_status != "Все статусы":
+                if selected_status in ("Отклонен", "Отклонён"):
+                    if request.display_status() not in ("Отклонен", "Отклонён"):
+                        continue
+                elif request.display_status() != selected_status:
+                    continue
 
             cached = self._filter_cache.get(id(request), {})
             if sender_filter:
@@ -871,10 +926,10 @@ class RegistryPage(QWidget):
 
             due_julian = int(cached.get("due", 0))
             if selected_deadline == "Сегодня":
-                if request.status in ("Исполнен", "Отклонен") or due_julian != today_julian:
+                if request.status in ("Исполнен", "Отклонен", "Отклонён") or due_julian != today_julian:
                     continue
             if selected_deadline == "Ближайшие 7 дней":
-                if request.status in ("Исполнен", "Отклонен") or not due_julian or not (today_julian <= due_julian <= today_julian + 6):
+                if request.status in ("Исполнен", "Отклонен", "Отклонён") or not due_julian or not (today_julian <= due_julian <= today_julian + 6):
                     continue
             if selected_deadline == "Без срока" and due_julian:
                 continue
@@ -939,6 +994,53 @@ class RegistryPage(QWidget):
         if self.sort_column == 8:
             return str(cached.get("status", ""))
         return ""
+
+    def get_filter_snapshot_fetcher(self):
+        """Capture filter values on the GUI thread and return a thread-safe database fetcher."""
+        if getattr(self, "_manual_requests_mode", False) or getattr(self, "request_service", None) is None:
+            snapshot = list(self._last_filtered)
+            return lambda: snapshot
+
+        date_from_iso = "" if self.date_from_filter.is_empty() else self.date_from_filter.date().toString("yyyy-MM-dd")
+        date_to_iso = "" if self.date_to_filter.is_empty() else self.date_to_filter.date().toString("yyyy-MM-dd")
+        search_text = self.search_input.text().strip()
+        search_field = self.search_field.currentText()
+        sender = self.sender_filter.text().strip()
+        recipient = self.recipient_filter.text().strip()
+        status = self.status_filter.currentText()
+        deadline = self.deadline_filter.currentText()
+        sort_column = self.sort_column
+        sort_ascending = self.sort_ascending
+        req_service = self.request_service
+        last_filtered_snapshot = list(self._last_filtered)
+
+        def fetcher():
+            try:
+                page, _total = req_service.query_requests_page(
+                    search_text=search_text,
+                    search_field=search_field,
+                    sender=sender,
+                    recipient=recipient,
+                    status=status,
+                    deadline=deadline,
+                    date_from_iso=date_from_iso,
+                    date_to_iso=date_to_iso,
+                    sort_column=sort_column,
+                    sort_ascending=sort_ascending,
+                    limit=100_000,
+                    offset=0,
+                    include_total=False,
+                )
+                return list(page)
+            except Exception:
+                return last_filtered_snapshot
+
+        return fetcher
+
+    def get_all_filtered_requests(self) -> list:
+        """Return all matching requests for the current filter across all pages."""
+        return self.get_filter_snapshot_fetcher()()
+
 
     def _set_quick_period(self, preset: str):
         today = QDate.currentDate()

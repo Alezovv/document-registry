@@ -419,14 +419,17 @@ class OnnxRussianNerEngine(NerEngine):
 
     def unload(self) -> bool:
         import gc
-        with self._load_lock:
-            with self._run_lock:
+        with self._run_lock:
+            with self._load_lock:
                 was_loaded = bool(self._loaded or self._session is not None)
                 self._session = None
                 self._tokenizer = None
                 self._np = None
                 self._loaded = False
-                self.last_metrics["loaded"] = False
+                self.last_metrics = {
+                    **dict(self.last_metrics),
+                    "loaded": False,
+                }
         if was_loaded:
             gc.collect()
         return was_loaded
@@ -464,7 +467,6 @@ class OnnxRussianNerEngine(NerEngine):
 
     def extract(self, text: str, blocks: Iterable[dict[str, Any]] = ()) -> list[NerEntity]:
         rss_before = self._rss_mb()
-        self._ensure_loaded()
         annotated = LayoutAnalyzer.annotate_blocks(blocks)
         if not annotated:
             annotated = [
@@ -516,31 +518,32 @@ class OnnxRussianNerEngine(NerEngine):
         total_tokens = 0
         inference_ms = 0.0
         with self._run_lock:
+            self._ensure_loaded()
             for chunk_text, spans, zone in chunks:
                 found, token_count, elapsed = self._run_chunk(chunk_text, spans, zone)
                 entities.extend(found)
                 total_tokens += token_count
                 inference_ms += elapsed
 
-        output = self._dedupe(entities)
-        rss_after = self._rss_mb()
-        self.last_metrics = {
-            "engine": self.name,
-            "active_engine": self.name,
-            "loaded": True,
-            "model": self._model_path.name if self._model_path else "",
-            "load_ms": self._load_ms,
-            "inference_ms": round(inference_ms, 1),
-            "blocks": len(annotated),
-            "onnx_calls": len(chunks),
-            "tokens": total_tokens,
-            "entities": len(output),
-            "min_confidence": self.min_confidence,
-            "rss_before_mb": rss_before,
-            "rss_after_mb": rss_after,
-            "rss_delta_mb": (
-                round(rss_after - rss_before, 1)
-                if rss_before is not None and rss_after is not None else None
-            ),
-        }
-        return output
+            output = self._dedupe(entities)
+            rss_after = self._rss_mb()
+            self.last_metrics = {
+                "engine": self.name,
+                "active_engine": self.name,
+                "loaded": bool(self._loaded),
+                "model": self._model_path.name if self._model_path else "",
+                "load_ms": self._load_ms,
+                "inference_ms": round(inference_ms, 1),
+                "blocks": len(annotated),
+                "onnx_calls": len(chunks),
+                "tokens": total_tokens,
+                "entities": len(output),
+                "min_confidence": self.min_confidence,
+                "rss_before_mb": rss_before,
+                "rss_after_mb": rss_after,
+                "rss_delta_mb": (
+                    round(rss_after - rss_before, 1)
+                    if rss_before is not None and rss_after is not None else None
+                ),
+            }
+            return output

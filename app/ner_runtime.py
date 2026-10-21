@@ -42,6 +42,7 @@ class FallbackNerEngine(NerEngine):
     def __init__(self, primary: NerEngine, fallback: NerEngine | None = None) -> None:
         self.primary = primary
         self.fallback = fallback or HeuristicRussianNerEngine()
+        self._lock = threading.RLock()
         self._disabled_reason = ""
         self.last_metrics: dict[str, Any] = {
             "engine": self.name,
@@ -51,28 +52,34 @@ class FallbackNerEngine(NerEngine):
 
     def extract(self, text: str, blocks: Iterable[dict[str, Any]] = ()) -> list[NerEntity]:
         materialized_blocks = list(blocks)
-        if not self._disabled_reason:
+        with self._lock:
+            disabled_reason = self._disabled_reason
+        if not disabled_reason:
             try:
                 output = self.primary.extract(text, materialized_blocks)
-                metrics = dict(getattr(self.primary, "last_metrics", {}) or {})
-                metrics.setdefault("engine", self.name)
-                metrics["engine"] = self.name
-                metrics["active_engine"] = getattr(self.primary, "name", "onnx")
-                metrics["fallback_used"] = False
-                self.last_metrics = metrics
+                with self._lock:
+                    metrics = dict(getattr(self.primary, "last_metrics", {}) or {})
+                    metrics.setdefault("engine", self.name)
+                    metrics["engine"] = self.name
+                    metrics["active_engine"] = getattr(self.primary, "name", "onnx")
+                    metrics["fallback_used"] = False
+                    self.last_metrics = metrics
                 return output
             except Exception as error:
-                self._disabled_reason = str(error) or type(error).__name__
+                with self._lock:
+                    self._disabled_reason = str(error) or type(error).__name__
+                    disabled_reason = self._disabled_reason
 
         output = self.fallback.extract(text, materialized_blocks)
-        self.last_metrics = {
-            "engine": self.name,
-            "active_engine": getattr(self.fallback, "name", "heuristic"),
-            "loaded": False,
-            "fallback_used": True,
-            "fallback_reason": self._disabled_reason,
-            "entities": len(output),
-        }
+        with self._lock:
+            self.last_metrics = {
+                "engine": self.name,
+                "active_engine": getattr(self.fallback, "name", "heuristic"),
+                "loaded": False,
+                "fallback_used": True,
+                "fallback_reason": disabled_reason,
+                "entities": len(output),
+            }
         return output
 
 

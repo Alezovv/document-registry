@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -17,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.db_merge import MergeAnalysis, MergeConflict, MergeStrategy
+from app.db_merge import DatabaseMergeService, MergeAnalysis, MergeConflict, MergeStrategy
 from app.ui.styles import PRIMARY_COLOR, PRIMARY_HOVER
 
 
@@ -26,9 +28,10 @@ class ConflictWidget(QFrame):
 
     resolution_changed = Signal(tuple, MergeStrategy)
 
-    def __init__(self, conflict: MergeConflict, parent=None):
+    def __init__(self, conflict: MergeConflict, parent=None, *, read_only: bool = False):
         super().__init__(parent)
         self.conflict = conflict
+        self.read_only = read_only
         self.selected_strategy = MergeStrategy.KEEP_CURRENT
         self._setup_ui()
 
@@ -41,7 +44,7 @@ class ConflictWidget(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        header = QLabel(f"<b>{self.conflict.display_label}</b>")
+        header = QLabel(f"<b>{escape(str(self.conflict.display_label), quote=False)}</b>")
         header.setWordWrap(True)
         header.setStyleSheet("color:#1E293B; font-size:12px; border:none;")
         layout.addWidget(header)
@@ -51,15 +54,26 @@ class ConflictWidget(QFrame):
         choice_layout.setSpacing(12)
         btn_group = QButtonGroup(self)
 
-        self.rb_current = QRadioButton("Оставить текущую запись")
+        cur_rec = getattr(self.conflict, "current_record", {}) or {}
+        rb_rec = getattr(self.conflict, "rollback_record", {}) or {}
+        cur_updated = str(cur_rec.get("updated_at") or "")
+        rb_updated = str(rb_rec.get("updated_at") or "")
+        cur_hint = f" (изм. {cur_updated})" if cur_updated else ""
+        rb_hint = f" (изм. {rb_updated})" if rb_updated else ""
+
+        self.rb_current = QRadioButton(f"Оставить текущую запись{cur_hint}")
         self.rb_current.setChecked(True)
         self.rb_current.toggled.connect(self._on_toggled)
 
-        self.rb_rollback = QRadioButton("Заменить версией из копии")
+        self.rb_rollback = QRadioButton(f"Заменить версией из копии{rb_hint}")
         self.rb_rollback.toggled.connect(self._on_toggled)
 
         btn_group.addButton(self.rb_current, 0)
         btn_group.addButton(self.rb_rollback, 1)
+
+        if self.read_only:
+            self.rb_current.setEnabled(False)
+            self.rb_rollback.setEnabled(False)
 
         choice_layout.addWidget(self.rb_current)
         choice_layout.addWidget(self.rb_rollback)
@@ -75,8 +89,9 @@ class ConflictWidget(QFrame):
 
         for diff in self.conflict.diffs:
             lbl = QLabel(
-                f"• <b>{diff.field_name}</b>: текущее = «{diff.current_value}» ↔ "
-                f"в копии = «{diff.rollback_value}»"
+                f"• <b>{escape(str(diff.field_name), quote=False)}</b>: "
+                f"текущее = «{escape(str(diff.current_value), quote=False)}» ↔ "
+                f"в копии = «{escape(str(diff.rollback_value), quote=False)}»"
             )
             lbl.setWordWrap(True)
             lbl.setStyleSheet("color:#334155; font-size:11px; font-weight:normal; border:none;")
@@ -89,7 +104,7 @@ class ConflictWidget(QFrame):
             self.selected_strategy = MergeStrategy.KEEP_ROLLBACK
         else:
             self.selected_strategy = MergeStrategy.KEEP_CURRENT
-        self.resolution_changed.emit(self.conflict.business_key, self.selected_strategy)
+        self.resolution_changed.emit((self.conflict.current_id, self.conflict.rollback_id), self.selected_strategy)
 
     def set_strategy(self, strategy: MergeStrategy) -> None:
         if strategy == MergeStrategy.KEEP_ROLLBACK:
@@ -203,10 +218,10 @@ class MergePreviewDialog(QDialog):
             cont_layout.setSpacing(8)
 
             for conflict in self.analysis.conflicts:
-                cw = ConflictWidget(conflict, container)
+                cw = ConflictWidget(conflict, container, read_only=self.compare_only)
                 cw.resolution_changed.connect(self._on_conflict_resolved)
                 self._conflict_widgets.append(cw)
-                self.conflict_resolutions[conflict.business_key] = cw.selected_strategy
+                self.conflict_resolutions[(conflict.current_id, conflict.rollback_id)] = cw.selected_strategy
                 cont_layout.addWidget(cw)
 
             cont_layout.addStretch()
@@ -272,6 +287,19 @@ class MergePreviewDialog(QDialog):
         if self.default_strategy in (MergeStrategy.KEEP_CURRENT, MergeStrategy.KEEP_ROLLBACK):
             for cw in self._conflict_widgets:
                 cw.set_strategy(self.default_strategy)
+        elif self.default_strategy == MergeStrategy.KEEP_NEWER:
+            for cw in self._conflict_widgets:
+                cur_rec = getattr(cw.conflict, "current_record", {}) or {}
+                rb_rec = getattr(cw.conflict, "rollback_record", {}) or {}
+                cur_updated = DatabaseMergeService._normalize_timestamp(
+                    cur_rec.get("updated_at") or cur_rec.get("created_at")
+                )
+                rb_updated = DatabaseMergeService._normalize_timestamp(
+                    rb_rec.get("updated_at") or rb_rec.get("created_at")
+                )
+                newer_strategy = MergeStrategy.KEEP_ROLLBACK if rb_updated > cur_updated else MergeStrategy.KEEP_CURRENT
+                cw.set_strategy(newer_strategy)
+
 
     def _on_conflict_resolved(self, key: tuple, strategy: MergeStrategy) -> None:
         self.conflict_resolutions[key] = strategy

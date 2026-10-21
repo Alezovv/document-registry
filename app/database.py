@@ -1,8 +1,10 @@
 import sqlite3
 import json
 import re
+import logging
 from pathlib import Path
 from contextlib import contextmanager
+from functools import lru_cache
 from typing import Any
 
 from app.app_paths import get_app_paths
@@ -17,6 +19,55 @@ DATA_DIR = _PATHS.data
 DB_PATH = _PATHS.database
 DOCUMENTS_DIR = _PATHS.documents
 _UNSET = object()
+
+
+@lru_cache(maxsize=256)
+def _compile_sql_like(pattern: str):
+    """Compile SQLite LIKE wildcards into a cached Python regex.
+
+    The application currently constructs patterns as ``%<query>%`` and does
+    not use an ESCAPE clause. Respect ``%`` and ``_`` wildcards while treating
+    all other characters literally.
+    """
+    pieces = []
+    for char in str(pattern or ""):
+        if char == "%":
+            pieces.append(".*")
+        elif char == "_":
+            pieces.append(".")
+        else:
+            pieces.append(re.escape(char))
+    return re.compile("^" + "".join(pieces) + "$", re.DOTALL)
+
+
+def _casefold_any_like(pattern, *values) -> int:
+    """Return 1 when any value matches a CASEFOLD(value) LIKE pattern.
+
+    This replaces many SQLite-to-Python UDF calls per row with one call while
+    preserving per-field matching (unlike concatenating the fields, it cannot
+    match a query spanning the boundary between two distinct fields).
+    """
+    if pattern is None:
+        return 0
+    folded_pattern = str(pattern).casefold()
+    # The normal registry search always wraps the user's query in ``%...%``.
+    # Use plain substring tests for that common case; keep the regex path for
+    # user-supplied LIKE wildcards inside the query so `%`/`_` semantics remain.
+    if (
+        len(folded_pattern) >= 2
+        and folded_pattern.startswith("%")
+        and folded_pattern.endswith("%")
+        and not any(char in folded_pattern[1:-1] for char in ("%", "_"))
+    ):
+        needle = folded_pattern[1:-1]
+        return int(any(needle in str(value or "").casefold() for value in values))
+
+    compiled = _compile_sql_like(folded_pattern)
+    for value in values:
+        candidate = str(value or "").casefold()
+        if compiled.match(candidate):
+            return 1
+    return 0
 
 
 class Database:
@@ -56,6 +107,7 @@ class Database:
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         conn.create_function("CASEFOLD", 1, lambda value: str(value or "").casefold(), deterministic=True)
+        conn.create_function("CASEFOLD_ANY_LIKE", -1, _casefold_any_like, deterministic=True)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 10000")
         conn.execute("PRAGMA synchronous = NORMAL")
@@ -503,7 +555,7 @@ class Database:
 
     def get_registry_status_counts(self) -> dict[str, int]:
         due_expr = self._sql_date_expr("due_date")
-        active_overdue = f"(status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} != '' AND {due_expr} < date('now','localtime'))"
+        active_overdue = f"(status NOT IN ('Исполнен', 'Отклонен', 'Отклонён') AND {due_expr} != '' AND {due_expr} < date('now','localtime'))"
         with self._get_connection() as conn:
             row = conn.execute(
                 f"""
@@ -512,17 +564,19 @@ class Database:
                     SUM(CASE WHEN status = 'Новый' AND NOT {active_overdue} THEN 1 ELSE 0 END) AS new_count,
                     SUM(CASE WHEN status = 'В работе' AND NOT {active_overdue} THEN 1 ELSE 0 END) AS progress_count,
                     SUM(CASE WHEN status = 'Исполнен' THEN 1 ELSE 0 END) AS done_count,
-                    SUM(CASE WHEN status = 'Отклонен' THEN 1 ELSE 0 END) AS rejected_count,
+                    SUM(CASE WHEN status IN ('Отклонен', 'Отклонён') THEN 1 ELSE 0 END) AS rejected_count,
                     SUM(CASE WHEN {active_overdue} THEN 1 ELSE 0 END) AS overdue_count
                 FROM requests
                 """
             ).fetchone()
+        rejected = int(row["rejected_count"] or 0)
         return {
             "total": int(row["total"] or 0),
             "Новый": int(row["new_count"] or 0),
             "В работе": int(row["progress_count"] or 0),
             "Исполнен": int(row["done_count"] or 0),
-            "Отклонен": int(row["rejected_count"] or 0),
+            "Отклонен": rejected,
+            "Отклонён": rejected,
             "Просрочен": int(row["overdue_count"] or 0),
         }
 
@@ -532,8 +586,8 @@ class Database:
             row = conn.execute(
                 f"""
                 SELECT
-                    SUM(CASE WHEN status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} != '' AND {due_expr} < date('now','localtime') THEN 1 ELSE 0 END) AS overdue,
-                    SUM(CASE WHEN status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} = date('now','localtime') THEN 1 ELSE 0 END) AS due_today
+                    SUM(CASE WHEN status NOT IN ('Исполнен', 'Отклонен', 'Отклонён') AND {due_expr} != '' AND {due_expr} < date('now','localtime') THEN 1 ELSE 0 END) AS overdue,
+                    SUM(CASE WHEN status NOT IN ('Исполнен', 'Отклонен', 'Отклонён') AND {due_expr} = date('now','localtime') THEN 1 ELSE 0 END) AS due_today
                 FROM requests
                 """
             ).fetchone()
@@ -579,9 +633,14 @@ class Database:
         sort_ascending: bool = True,
         limit: int = 200,
         offset: int = 0,
-    ) -> tuple[list[Request], int]:
-        """Return one registry page while SQLite holds filtering/sorting state."""
-        safe_limit = max(20, min(int(limit), 1000))
+        include_total: bool = True,
+    ) -> tuple[list[Request], int | None]:
+        """Return one registry page while SQLite holds filtering/sorting state.
+
+        ``include_total=False`` is intended for subsequent pages when the UI
+        already holds the total from the first page, avoiding a repeated COUNT.
+        """
+        safe_limit = max(1, min(int(limit), 200_000))
         safe_offset = max(0, int(offset))
         where: list[str] = []
         params: list[Any] = []
@@ -598,14 +657,16 @@ class Database:
         )
 
         if status == "Активные":
-            where.append("r.status NOT IN ('Исполнен', 'Отклонен')")
+            where.append("r.status NOT IN ('Исполнен', 'Отклонен', 'Отклонён')")
         elif status == "Просрочен":
-            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
+            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен', 'Отклонён') AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
         elif status in ("Новый", "В работе"):
             where.append(f"r.status = ? AND NOT ({due_expr} != '' AND {due_expr} < date('now','localtime'))")
             params.append(status)
         elif status in ("Дубликат", "Дубликаты"):
             where.append(f"r.id IN {dup_subquery}")
+        elif status in ("Отклонен", "Отклонён"):
+            where.append("r.status IN ('Отклонен', 'Отклонён')")
         elif status and status != "Все статусы":
             where.append("r.status = ?")
             params.append(status)
@@ -618,13 +679,13 @@ class Database:
             params.append(date_to_iso)
 
         if deadline == "Сегодня":
-            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} = date('now','localtime')")
+            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен', 'Отклонён') AND {due_expr} = date('now','localtime')")
         elif deadline == "Ближайшие 7 дней":
-            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} BETWEEN date('now','localtime') AND date('now','localtime','+6 day')")
+            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен', 'Отклонён') AND {due_expr} BETWEEN date('now','localtime') AND date('now','localtime','+6 day')")
         elif deadline == "Без срока":
             where.append("TRIM(COALESCE(r.due_date, '')) = ''")
         elif deadline == "Просрочен":
-            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен') AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
+            where.append(f"r.status NOT IN ('Исполнен', 'Отклонен', 'Отклонён') AND {due_expr} != '' AND {due_expr} < date('now','localtime')")
 
         if sender.strip():
             needle_text = f"%{sender.strip().casefold()}%"
@@ -653,23 +714,21 @@ class Database:
                 fts_q = self._fts_query(text) if len(text) >= 3 else ""
                 if fts_q:
                     where.append(
-                        "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD(r.received_date) LIKE ? OR CASEFOLD(r.due_date) LIKE ? "
-                        "OR CASEFOLD(r.completed_date) LIKE ? OR CASEFOLD(r.from_department) LIKE ? "
-                        "OR CASEFOLD(r.from_position) LIKE ? OR CASEFOLD(r.from_person) LIKE ? "
-                        "OR CASEFOLD(r.to_person) LIKE ? OR CASEFOLD(r.request_subject) LIKE ? "
-                        "OR CASEFOLD(r.note) LIKE ? OR CASEFOLD(r.status) LIKE ? "
+                        "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD_ANY_LIKE(?, "
+                        "r.received_date, r.due_date, r.completed_date, r.from_department, "
+                        "r.from_position, r.from_person, r.to_person, r.request_subject, r.note, r.status) "
                         f"OR r.id IN (SELECT CAST(request_id AS INTEGER) FROM request_fts WHERE request_fts MATCH ?){dup_or})"
                     )
-                    params.extend([like] * 11 + [fts_q])
+                    params.extend([like, like, fts_q])
                 else:
                     where.append(
-                        "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD(r.received_date) LIKE ? OR CASEFOLD(r.due_date) LIKE ? "
-                        "OR CASEFOLD(r.completed_date) LIKE ? OR CASEFOLD(r.from_department) LIKE ? "
-                        "OR CASEFOLD(r.from_position) LIKE ? OR CASEFOLD(r.from_person) LIKE ? "
-                        "OR CASEFOLD(r.to_person) LIKE ? OR CASEFOLD(r.request_subject) LIKE ? "
-                        f"OR CASEFOLD(r.note) LIKE ? OR CASEFOLD(r.status) LIKE ? OR CASEFOLD(COALESCE(s.ocr_text,'')) LIKE ?{dup_or})"
+                        "(CAST(r.id AS TEXT) LIKE ? OR CASEFOLD_ANY_LIKE(?, "
+                        "r.received_date, r.due_date, r.completed_date, r.from_department, "
+                        "r.from_position, r.from_person, r.to_person, r.request_subject, r.note, r.status, "
+                        "COALESCE(s.ocr_text, '')) "
+                        f"{dup_or})"
                     )
-                    params.extend([like] * 12)
+                    params.extend([like, like])
             elif search_field == "Статус":
                 where.append(f"(CASEFOLD(r.status) LIKE ?{dup_or})")
                 params.append(like)
@@ -701,7 +760,10 @@ class Database:
             else " FROM requests r"
         )
         with self._get_connection() as conn:
-            total = int(conn.execute("SELECT COUNT(*)" + base + where_sql, params).fetchone()[0])
+            total = (
+                int(conn.execute("SELECT COUNT(*)" + base + where_sql, params).fetchone()[0])
+                if include_total else None
+            )
             rows = conn.execute(
                 "SELECT r.*" + base + where_sql + order_sql + " LIMIT ? OFFSET ?",
                 params + [safe_limit, safe_offset],
@@ -763,8 +825,311 @@ class Database:
             ).fetchall()
         return [self._row_to_request(row) for row in rows]
 
-    def add_request(self, request: Request):
+    @staticmethod
+    def _metadata_document_number(diagnostics_json: str | None) -> str:
+        """Best-effort extraction of the compact parser's document-number field."""
+        try:
+            payload = json.loads(diagnostics_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return ""
+        keys = {"document_number", "doc_number", "outgoing_number", "outgoing_doc_number"}
+
+        def walk(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if str(key).casefold() in keys:
+                        if isinstance(child, dict):
+                            candidate = child.get("value") or child.get("text") or ""
+                        else:
+                            candidate = child
+                        if isinstance(candidate, (str, int, float)) and str(candidate).strip():
+                            return str(candidate).strip()
+                    found = walk(child)
+                    if found:
+                        return found
+            elif isinstance(value, list):
+                for child in value:
+                    found = walk(child)
+                    if found:
+                        return found
+            return ""
+
+        return walk(payload)
+
+    def get_case_ids_for_request(self, request_id: int) -> list[int]:
         with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT case_id FROM case_requests WHERE request_id = ? ORDER BY case_id",
+                (int(request_id),),
+            ).fetchall()
+        return [int(row[0]) for row in rows]
+
+    def create_case(
+        self, title: str, note: str = "", initial_request_ids=()
+    ) -> int:
+        normalized_title = str(title or "").strip()
+        if not normalized_title:
+            raise ValueError("Название дела не может быть пустым.")
+        request_ids = sorted({int(value) for value in initial_request_ids if value is not None})
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO cases(title, note) VALUES (?, ?)",
+                (normalized_title, str(note or "").strip()),
+            )
+            case_id = int(cursor.lastrowid)
+            for request_id in request_ids:
+                exists = conn.execute(
+                    "SELECT 1 FROM requests WHERE id = ?", (request_id,)
+                ).fetchone()
+                if exists is None:
+                    raise ValueError(f"Запрос #{request_id} не найден.")
+                conn.execute(
+                    "INSERT OR IGNORE INTO case_requests(case_id, request_id) VALUES (?, ?)",
+                    (case_id, request_id),
+                )
+        return case_id
+
+    def update_case(self, case_id: int, title: str, note: str = "") -> None:
+        normalized_title = str(title or "").strip()
+        if not normalized_title:
+            raise ValueError("Название дела не может быть пустым.")
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE cases SET title = ?, note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (normalized_title, str(note or "").strip(), int(case_id)),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("Дело не найдено.")
+
+    def delete_case(self, case_id: int) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM cases WHERE id = ?", (int(case_id),))
+            return cursor.rowcount > 0
+
+    def add_request_to_case(self, case_id: int, request_id: int) -> bool:
+        case_id, request_id = int(case_id), int(request_id)
+        with self._get_connection() as conn:
+            if conn.execute("SELECT 1 FROM cases WHERE id = ?", (case_id,)).fetchone() is None:
+                raise ValueError("Дело не найдено.")
+            if conn.execute("SELECT 1 FROM requests WHERE id = ?", (request_id,)).fetchone() is None:
+                raise ValueError(f"Запрос #{request_id} не найден.")
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO case_requests(case_id, request_id) VALUES (?, ?)",
+                (case_id, request_id),
+            )
+            if cursor.rowcount:
+                conn.execute(
+                    "UPDATE cases SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (case_id,)
+                )
+            return cursor.rowcount > 0
+
+    def remove_request_from_case(self, case_id: int, request_id: int) -> int:
+        case_id, request_id = int(case_id), int(request_id)
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM case_requests WHERE case_id = ? AND request_id = ?",
+                (case_id, request_id),
+            )
+            if cursor.rowcount:
+                conn.execute(
+                    "UPDATE cases SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (case_id,)
+                )
+            row = conn.execute(
+                "SELECT COUNT(*) FROM case_requests WHERE case_id = ?", (case_id,)
+            ).fetchone()
+            return int(row[0] or 0)
+
+    def list_cases(self, limit: int = 200) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 1000))
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.*, COUNT(cr.request_id) AS request_count
+                FROM cases c LEFT JOIN case_requests cr ON cr.case_id = c.id
+                GROUP BY c.id
+                ORDER BY c.updated_at DESC, c.id DESC LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_cases_for_request(self, request_id: int) -> list[dict[str, Any]]:
+        request_id = int(request_id)
+        with self._get_connection() as conn:
+            cases = conn.execute(
+                """
+                SELECT c.*, COUNT(cr2.request_id) AS request_count
+                FROM cases c
+                JOIN case_requests cr ON cr.case_id = c.id AND cr.request_id = ?
+                LEFT JOIN case_requests cr2 ON cr2.case_id = c.id
+                GROUP BY c.id ORDER BY c.updated_at DESC, c.id DESC
+                """,
+                (request_id,),
+            ).fetchall()
+            result = []
+            for case_row in cases:
+                case_data = dict(case_row)
+                members = conn.execute(
+                    f"""
+                    SELECT r.*, cr.added_at,
+                           COALESCE(pm.diagnostics_json, '{{}}') AS diagnostics_json
+                    FROM case_requests cr
+                    JOIN requests r ON r.id = cr.request_id
+                    LEFT JOIN request_parser_metadata pm ON pm.request_id = r.id
+                    WHERE cr.case_id = ?
+                    ORDER BY CASE WHEN {self._sql_date_expr('r.received_date')} = '' THEN 1 ELSE 0 END ASC,
+                             {self._sql_date_expr('r.received_date')} ASC,
+                             r.created_at ASC, r.id ASC
+                    """,
+                    (int(case_data["id"]),),
+                ).fetchall()
+                preview = []
+                for row in members:
+                    item = dict(row)
+                    item["document_number"] = self._metadata_document_number(item.pop("diagnostics_json", "{}"))
+                    preview.append(item)
+                case_data["requests_preview"] = preview[:8]
+                result.append(case_data)
+        return result
+
+    def get_case_details(self, case_id: int) -> dict[str, Any] | None:
+        case_id = int(case_id)
+        with self._get_connection() as conn:
+            case_row = conn.execute(
+                """
+                SELECT c.*, COUNT(cr.request_id) AS request_count
+                FROM cases c LEFT JOIN case_requests cr ON cr.case_id = c.id
+                WHERE c.id = ? GROUP BY c.id
+                """,
+                (case_id,),
+            ).fetchone()
+            if case_row is None:
+                return None
+            case_data = dict(case_row)
+            rows = conn.execute(
+                f"""
+                SELECT r.*, cr.added_at,
+                       COALESCE(pm.diagnostics_json, '{{}}') AS diagnostics_json
+                FROM case_requests cr
+                JOIN requests r ON r.id = cr.request_id
+                LEFT JOIN request_parser_metadata pm ON pm.request_id = r.id
+                WHERE cr.case_id = ?
+                ORDER BY CASE WHEN {self._sql_date_expr('r.received_date')} = '' THEN 1 ELSE 0 END ASC,
+                         {self._sql_date_expr('r.received_date')} ASC,
+                         r.created_at ASC, r.id ASC
+                """,
+                (case_id,),
+            ).fetchall()
+            members = []
+            for row in rows:
+                payload = dict(row)
+                number = self._metadata_document_number(payload.pop("diagnostics_json", "{}"))
+                members.append({
+                    "request": self._row_to_request(row),
+                    "document_number": number,
+                    "added_at": str(payload.get("added_at") or ""),
+                })
+            case_data["requests"] = members
+            status_counts: dict[str, int] = {}
+            for item in members:
+                request = item["request"]
+                status = request.display_status()
+                status_counts[status] = status_counts.get(status, 0) + 1
+            case_data["status_counts"] = status_counts
+            return case_data
+
+    def search_cases(self, query: str = "", limit: int = 50) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 200))
+        text = str(query or "").strip()
+        where = ""
+        params: list[Any] = []
+        if text:
+            pattern = f"%{text.casefold()}%"
+            where = """WHERE CASEFOLD(c.title) LIKE ? OR CASEFOLD(c.note) LIKE ?
+                OR EXISTS (SELECT 1 FROM case_requests cx JOIN requests r ON r.id = cx.request_id
+                    WHERE cx.case_id = c.id AND (
+                        CASEFOLD(COALESCE(r.from_department,'')) LIKE ? OR
+                        CASEFOLD(COALESCE(r.from_person,'')) LIKE ? OR
+                        CASEFOLD(COALESCE(r.to_person,'')) LIKE ? OR
+                        CASEFOLD(COALESCE(r.request_subject,'')) LIKE ?))"""
+            params.extend([pattern] * 6)
+        params.append(safe_limit)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT c.*, COUNT(cr.request_id) AS request_count
+                FROM cases c LEFT JOIN case_requests cr ON cr.case_id = c.id
+                {where}
+                GROUP BY c.id
+                ORDER BY c.updated_at DESC, c.id DESC LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def search_requests_for_case_linking(
+        self, query: str, exclude_case_id: int | None = None, limit: int = 50
+    ) -> list[Request]:
+        text = str(query or "").strip()
+        if not text:
+            return []
+        safe_limit = max(1, min(int(limit), 200))
+        raw_id = text[1:] if text.startswith("#") else text
+        exact_id = int(raw_id) if raw_id.isdigit() else -1
+        pattern = f"%{text.casefold()}%"
+        number_pattern = f"%{text}%"
+        exclusion = ""
+        params: list[Any] = [exact_id, pattern, pattern, pattern, pattern, pattern, pattern, pattern, number_pattern]
+        if exclude_case_id is not None:
+            exclusion = "AND NOT EXISTS (SELECT 1 FROM case_requests cx WHERE cx.case_id = ? AND cx.request_id = r.id)"
+            params.append(int(exclude_case_id))
+        params.append(safe_limit)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT r.* FROM requests r
+                LEFT JOIN request_parser_metadata pm ON pm.request_id = r.id
+                WHERE (
+                    r.id = ?
+                    OR CASEFOLD(COALESCE(r.from_department,'')) LIKE ?
+                    OR CASEFOLD(COALESCE(r.from_person,'')) LIKE ?
+                    OR CASEFOLD(COALESCE(r.to_person,'')) LIKE ?
+                    OR CASEFOLD(COALESCE(r.request_subject,'')) LIKE ?
+                    OR CASEFOLD(COALESCE(r.received_date,'')) LIKE ?
+                    OR CASEFOLD(COALESCE(r.status,'')) LIKE ?
+                    OR CASEFOLD(COALESCE(r.source_document,'')) LIKE ?
+                    OR COALESCE(pm.diagnostics_json,'') LIKE ?
+                ) {exclusion}
+                ORDER BY r.is_pinned DESC, r.id DESC LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._row_to_request(row) for row in rows]
+
+    def add_request(
+        self,
+        request: Request,
+        *,
+        case_ids=(),
+        new_case_title: str = "",
+        new_case_note: str = "",
+    ):
+        """Create a request and optional case memberships in one SQLite transaction."""
+        normalized_case_ids = sorted({int(value) for value in (case_ids or ()) if value is not None})
+        normalized_case_title = str(new_case_title or "").strip()
+        with self._get_connection() as conn:
+            if normalized_case_ids:
+                placeholders = ",".join("?" for _ in normalized_case_ids)
+                existing = {
+                    int(row[0]) for row in conn.execute(
+                        f"SELECT id FROM cases WHERE id IN ({placeholders})",
+                        normalized_case_ids,
+                    ).fetchall()
+                }
+                missing = [value for value in normalized_case_ids if value not in existing]
+                if missing:
+                    raise ValueError("Не найдены дела: " + ", ".join(f"#{value}" for value in missing))
+
             cursor = conn.execute(
                 """
                 INSERT INTO requests (
@@ -790,7 +1155,7 @@ class Database:
                     int(request.source_size_bytes or 0),
                 ),
             )
-            request_id = cursor.lastrowid
+            request_id = int(cursor.lastrowid)
             conn.execute(
                 """
                 INSERT INTO request_history (request_id, action, description, snapshot)
@@ -798,6 +1163,25 @@ class Database:
                 """,
                 (request_id, f"Создан запрос (ID: {request_id})"),
             )
+            for case_id in normalized_case_ids:
+                conn.execute(
+                    "INSERT INTO case_requests(case_id, request_id) VALUES (?, ?)",
+                    (case_id, request_id),
+                )
+                conn.execute(
+                    "UPDATE cases SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (case_id,),
+                )
+            if normalized_case_title:
+                case_cursor = conn.execute(
+                    "INSERT INTO cases(title, note) VALUES (?, ?)",
+                    (normalized_case_title, str(new_case_note or "").strip()),
+                )
+                case_id = int(case_cursor.lastrowid)
+                conn.execute(
+                    "INSERT INTO case_requests(case_id, request_id) VALUES (?, ?)",
+                    (case_id, request_id),
+                )
 
         request.id = request_id
         return request_id
@@ -951,6 +1335,32 @@ class Database:
             snapshot_data = dict(old_values)
             if snapshot_extra:
                 snapshot_data.update(snapshot_extra)
+
+            try:
+                meta_row = conn.execute(
+                    "SELECT parser_version, diagnostics_json FROM request_parser_metadata WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()
+                if meta_row:
+                    snapshot_data["_parser_metadata"] = {
+                        "parser_version": meta_row["parser_version"],
+                        "diagnostics_json": meta_row["diagnostics_json"],
+                    }
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                search_row = conn.execute(
+                    "SELECT ocr_text FROM request_search_content WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()
+                if search_row and search_row["ocr_text"]:
+                    snapshot_data["_search_content"] = {
+                        "ocr_text": search_row["ocr_text"],
+                    }
+            except sqlite3.OperationalError:
+                pass
+
             snapshot_data = self._portable_snapshot_data(snapshot_data)
 
             conn.execute(
@@ -1041,6 +1451,44 @@ class Database:
                         json.dumps(snapshot_data, ensure_ascii=False),
                     ),
                 )
+                meta_data = snapshot_data.get("_parser_metadata")
+                if isinstance(meta_data, dict) and "parser_version" in meta_data:
+                    try:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO request_parser_metadata (request_id, parser_version, diagnostics_json, updated_at) "
+                            "VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                            (target_id, str(meta_data.get("parser_version", "")), str(meta_data.get("diagnostics_json", "{}"))),
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+                search_data = snapshot_data.get("_search_content")
+                if isinstance(search_data, dict) and search_data.get("ocr_text"):
+                    try:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO request_search_content (request_id, ocr_text, indexed_at) "
+                            "VALUES (?, ?, CURRENT_TIMESTAMP)",
+                            (target_id, str(search_data["ocr_text"])),
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+
+                case_ids = snapshot_data.get("_case_ids", [])
+                if isinstance(case_ids, list):
+                    for case_value in case_ids:
+                        try:
+                            case_id = int(case_value)
+                        except (TypeError, ValueError):
+                            continue
+                        if conn.execute("SELECT 1 FROM cases WHERE id = ?", (case_id,)).fetchone():
+                            linked = conn.execute(
+                                "INSERT OR IGNORE INTO case_requests(case_id, request_id) VALUES (?, ?)",
+                                (case_id, target_id),
+                            )
+                            if linked.rowcount:
+                                conn.execute(
+                                    "UPDATE cases SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                    (case_id,),
+                                )
             return True
 
         self.update_request(
@@ -1048,6 +1496,46 @@ class Database:
             action="restore",
             snapshot_extra=snapshot_extra,
         )
+        # If the request still exists, the snapshot may still represent a prior
+        # delete/restore cycle. Reapply saved memberships only for extant cases.
+        meta_data = snapshot_data.get("_parser_metadata")
+        search_data = snapshot_data.get("_search_content")
+        case_ids = snapshot_data.get("_case_ids", [])
+        with self._get_connection() as conn:
+            if isinstance(meta_data, dict) and "parser_version" in meta_data:
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO request_parser_metadata (request_id, parser_version, diagnostics_json, updated_at) "
+                        "VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                        (target_id, str(meta_data.get("parser_version", "")), str(meta_data.get("diagnostics_json", "{}"))),
+                    )
+                except sqlite3.OperationalError:
+                    pass
+            if isinstance(search_data, dict) and search_data.get("ocr_text"):
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO request_search_content (request_id, ocr_text, indexed_at) "
+                        "VALUES (?, ?, CURRENT_TIMESTAMP)",
+                        (target_id, str(search_data["ocr_text"])),
+                    )
+                except sqlite3.OperationalError:
+                    pass
+            if isinstance(case_ids, list):
+                for case_value in case_ids:
+                    try:
+                        case_id = int(case_value)
+                    except (TypeError, ValueError):
+                        continue
+                    if conn.execute("SELECT 1 FROM cases WHERE id = ?", (case_id,)).fetchone():
+                        linked = conn.execute(
+                            "INSERT OR IGNORE INTO case_requests(case_id, request_id) VALUES (?, ?)",
+                            (case_id, target_id),
+                        )
+                        if linked.rowcount:
+                            conn.execute(
+                                "UPDATE cases SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                (case_id,),
+                            )
         return True
 
     def attach_document(self, request_id: int, stored_path: str):
@@ -1548,10 +2036,21 @@ class Database:
             count = int(conn.execute("SELECT COUNT(*) FROM request_fts").fetchone()[0])
         return count
 
-    def search_request_hits_full_text(self, value: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    def search_request_hits_full_text(
+        self,
+        value: str,
+        *,
+        limit: int = 500,
+        request_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+    ) -> list[dict[str, Any]]:
         text = str(value or "").strip()
         if not text:
             return []
+        allowed_ids = None
+        if request_ids is not None:
+            allowed_ids = sorted({int(value) for value in request_ids if value is not None and int(value) > 0})
+            if not allowed_ids:
+                return []
         query = self._fts_query(text)
         safe_limit = max(1, min(int(limit), 2000))
         is_dup_search = any(term in text.casefold() for term in ("дубликат", "дубликаты", "дубль", "дубли", "копи"))
@@ -1566,6 +2065,17 @@ class Database:
         if query:
             try:
                 with self._get_connection() as conn:
+                    id_filter = ""
+                    query_params: list[Any] = [query]
+                    if allowed_ids is not None:
+                        # Registry pages are bounded (150–400 rows by default),
+                        # keeping this IN list below SQLite's common variable limit.
+                        # Chunking is unnecessary for the UI use-case; guard unusual
+                        # external callers by retaining only the first 900 unique IDs.
+                        allowed_ids = allowed_ids[:900]
+                        id_filter = " AND CAST(request_id AS INTEGER) IN (" + ",".join("?" for _ in allowed_ids) + ")"
+                        query_params.extend(allowed_ids)
+                    query_params.append(safe_limit)
                     rows = conn.execute(
                         """
                         SELECT CAST(request_id AS INTEGER) AS request_id,
@@ -1573,10 +2083,8 @@ class Database:
                                bm25(request_fts) AS rank
                         FROM request_fts
                         WHERE request_fts MATCH ?
-                        ORDER BY rank, rowid DESC
-                        LIMIT ?
-                        """,
-                        (query, safe_limit),
+                        """ + id_filter + " ORDER BY rank, rowid DESC LIMIT ?",
+                        query_params,
                     ).fetchall()
                     hits = [
                         {"request_id": int(row["request_id"]), "snippet": str(row["snippet"] or ""), "rank": float(row["rank"] or 0.0)}
@@ -1587,6 +2095,8 @@ class Database:
                         seen = {h["request_id"] for h in hits}
                         for r in dup_rows:
                             rid = int(r["id"])
+                            if allowed_ids is not None and rid not in allowed_ids:
+                                continue
                             if rid not in seen:
                                 hits.append({"request_id": rid, "snippet": "⚠️ Дубликат", "rank": -0.5})
                                 seen.add(rid)
@@ -1594,6 +2104,9 @@ class Database:
             except sqlite3.OperationalError:
                 pass
         ids = self.search_request_ids_full_text(text, limit=safe_limit)
+        if allowed_ids is not None:
+            allowed_set = set(allowed_ids)
+            ids = [request_id for request_id in ids if request_id in allowed_set]
         return [{"request_id": request_id, "snippet": "", "rank": 0.0} for request_id in ids]
 
     def quick_check(self) -> str:
@@ -1636,11 +2149,11 @@ class Database:
                 dup_or = f" OR id IN {dup_subquery}" if is_dup_search else ""
                 query = f"""
                     SELECT * FROM requests
-                    WHERE CAST(id AS TEXT) LIKE ? OR received_date LIKE ?
-                        OR due_date LIKE ? OR completed_date LIKE ?
-                        OR from_department LIKE ? OR from_position LIKE ?
-                        OR from_person LIKE ? OR to_person LIKE ?
-                        OR request_subject LIKE ? OR note LIKE ? OR status LIKE ?
+                    WHERE CAST(id AS TEXT) LIKE ? OR CASEFOLD(received_date) LIKE CASEFOLD(?)
+                        OR CASEFOLD(due_date) LIKE CASEFOLD(?) OR CASEFOLD(completed_date) LIKE CASEFOLD(?)
+                        OR CASEFOLD(from_department) LIKE CASEFOLD(?) OR CASEFOLD(from_position) LIKE CASEFOLD(?)
+                        OR CASEFOLD(from_person) LIKE CASEFOLD(?) OR CASEFOLD(to_person) LIKE CASEFOLD(?)
+                        OR CASEFOLD(request_subject) LIKE CASEFOLD(?) OR CASEFOLD(note) LIKE CASEFOLD(?) OR CASEFOLD(status) LIKE CASEFOLD(?)
                         {dup_or}
                     ORDER BY is_pinned DESC, id DESC
                 """
@@ -1648,13 +2161,13 @@ class Database:
                 params = (search_value,) * 11
             elif field == "status" and is_dup_search:
                 query = (
-                    f"SELECT * FROM requests WHERE (CAST(status AS TEXT) LIKE ? OR id IN {dup_subquery}) "
+                    f"SELECT * FROM requests WHERE (CASEFOLD(CAST(status AS TEXT)) LIKE CASEFOLD(?) OR id IN {dup_subquery}) "
                     "ORDER BY is_pinned DESC, id DESC"
                 )
                 params = (f"%{value}%",)
             else:
                 query = (
-                    f"SELECT * FROM requests WHERE CAST({field} AS TEXT) LIKE ? "
+                    f"SELECT * FROM requests WHERE CASEFOLD(CAST({field} AS TEXT)) LIKE CASEFOLD(?) "
                     "ORDER BY is_pinned DESC, id DESC"
                 )
                 params = (f"%{value}%",)

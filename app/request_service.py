@@ -45,7 +45,7 @@ class RequestService:
     @staticmethod
     def _release_transient_import_payload(request: Request) -> None:
         """Drop OCR/parser-only attributes once SQLite has persisted them."""
-        for name in ("_ocr_text", "_parser_diagnostics"):
+        for name in ("_ocr_text", "_parser_diagnostics", "_pending_case_ids", "_pending_new_case_title", "_pending_new_case_note"):
             try:
                 delattr(request, name)
             except AttributeError:
@@ -153,6 +153,9 @@ class RequestService:
         self._normalize_completion_date(request)
         ocr_text = str(getattr(request, "_ocr_text", "") or "").strip()
         parser_diagnostics = compact_parser_diagnostics(getattr(request, "_parser_diagnostics", {}) or {})
+        pending_case_ids = getattr(request, "_pending_case_ids", ()) or ()
+        pending_new_case_title = str(getattr(request, "_pending_new_case_title", "") or "").strip()
+        pending_new_case_note = str(getattr(request, "_pending_new_case_note", "") or "")
         stored: StoredDocument | None = None
         source_document = ""
         source_sha256 = ""
@@ -172,7 +175,12 @@ class RequestService:
             source_size_bytes=source_size_bytes,
         )
         try:
-            request_id = self.database.add_request(persisted)
+            request_id = self.database.add_request(
+                persisted,
+                case_ids=pending_case_ids,
+                new_case_title=pending_new_case_title,
+                new_case_note=pending_new_case_note,
+            )
         except Exception:
             self.documents.discard_created_document(stored)
             raise
@@ -283,8 +291,16 @@ class RequestService:
     def search_request_ids_full_text(self, value: str, *, limit: int = 5000) -> list[int]:
         return self.database.search_request_ids_full_text(value, limit=limit)
 
-    def search_request_hits_full_text(self, value: str, *, limit: int = 500) -> list[dict]:
-        return self.database.search_request_hits_full_text(value, limit=limit)
+    def search_request_hits_full_text(
+        self,
+        value: str,
+        *,
+        limit: int = 500,
+        request_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+    ) -> list[dict]:
+        return self.database.search_request_hits_full_text(
+            value, limit=limit, request_ids=request_ids
+        )
 
     def rebuild_search_index(self) -> int:
         return self.database.rebuild_search_index()
@@ -310,6 +326,43 @@ class RequestService:
     def get_search_index_stats(self) -> dict[str, int]:
         return self.database.get_search_index_stats()
 
+    # Related-case operations deliberately remain thin service wrappers;
+    # database transactions and integrity constraints are owned by Database.
+    def create_case(self, title: str, note: str = "", initial_request_ids=()) -> int:
+        return self.database.create_case(title, note, initial_request_ids)
+
+    def update_case(self, case_id: int, title: str, note: str = "") -> None:
+        self.database.update_case(case_id, title, note)
+
+    def delete_case(self, case_id: int) -> bool:
+        return self.database.delete_case(case_id)
+
+    def add_request_to_case(self, case_id: int, request_id: int) -> bool:
+        return self.database.add_request_to_case(case_id, request_id)
+
+    def remove_request_from_case(self, case_id: int, request_id: int) -> int:
+        return self.database.remove_request_from_case(case_id, request_id)
+
+    def get_case_ids_for_request(self, request_id: int) -> list[int]:
+        return self.database.get_case_ids_for_request(request_id)
+
+    def get_cases_for_request(self, request_id: int) -> list[dict]:
+        return self.database.get_cases_for_request(request_id)
+
+    def get_case_details(self, case_id: int) -> dict | None:
+        return self.database.get_case_details(case_id)
+
+    def list_cases(self, limit: int = 200) -> list[dict]:
+        return self.database.list_cases(limit)
+
+    def search_cases(self, query: str = "", limit: int = 50) -> list[dict]:
+        return self.database.search_cases(query, limit)
+
+    def search_requests_for_case_linking(
+        self, query: str, exclude_case_id: int | None = None, limit: int = 50
+    ) -> list[Request]:
+        return self.database.search_requests_for_case_linking(query, exclude_case_id, limit)
+
     def delete_request(self, request_id: int) -> bool:
         request = self.database.get_request(request_id)
         if request is None:
@@ -321,12 +374,19 @@ class RequestService:
                 request.source_document, request_id
             )
 
-        snapshot_extra = (
-            {"_trash_path": str(trash_path)} if trash_path is not None else None
-        )
+        snapshot_extra: dict = {}
+        if trash_path is not None:
+            snapshot_extra["_trash_path"] = str(trash_path)
         try:
+            # ON DELETE CASCADE removes membership rows. Persist their IDs in the
+            # history snapshot so restoring a deleted request can restore its links.
+            # Keep this lookup inside the same error-handling block as deletion: if
+            # it fails after the PDF was moved to trash, the file must be restored.
+            case_ids = self.database.get_case_ids_for_request(request_id)
+            if case_ids:
+                snapshot_extra["_case_ids"] = case_ids
             removed = self.database.delete_request(
-                request_id, snapshot_extra=snapshot_extra
+                request_id, snapshot_extra=snapshot_extra or None
             )
         except Exception:
             if trash_path is not None:
@@ -483,7 +543,7 @@ class RequestService:
         if not ids:
             return 0
 
-        if status is not None and status not in {"Новый", "В работе", "Исполнен", "Отклонен"}:
+        if status is not None and status not in {"Новый", "В работе", "Исполнен", "Отклонен", "Отклонён"}:
             raise ValueError("Недопустимый статус для массовой операции.")
         if due_mode is not None and due_mode not in {"today", "+7", "+14", "+30", "clear"}:
             raise ValueError("Недопустимый режим срока исполнения.")

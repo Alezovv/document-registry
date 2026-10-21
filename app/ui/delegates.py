@@ -5,19 +5,23 @@ from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QStyledItemDelegate
 
 
+STATUS_STYLES = {
+    "Новый": {"icon": "✦", "text": "#175CD3", "bg": "#EFF8FF"},
+    "В работе": {"icon": "◐", "text": "#B54708", "bg": "#FFFAEB"},
+    "Исполнен": {"icon": "✓", "text": "#027A48", "bg": "#ECFDF3"},
+    "Отклонен": {"icon": "×", "text": "#B42318", "bg": "#FEF3F2"},
+    "Отклонён": {"icon": "×", "text": "#B42318", "bg": "#FEF3F2"},
+    "Просрочен": {"icon": "!", "text": "#B42318", "bg": "#FEE4E2"},
+}
+
+
 class StatusDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         status = index.data(Qt.ItemDataRole.DisplayRole)
         if not status:
             return super().paint(painter, option, index)
 
-        styles = {
-            "Новый": {"icon": "✦", "text": "#175CD3", "bg": "#EFF8FF"},
-            "В работе": {"icon": "◐", "text": "#B54708", "bg": "#FFFAEB"},
-            "Исполнен": {"icon": "✓", "text": "#027A48", "bg": "#ECFDF3"},
-            "Отклонен": {"icon": "×", "text": "#B42318", "bg": "#FEF3F2"},
-            "Просрочен": {"icon": "!", "text": "#B42318", "bg": "#FEE4E2"},
-        }
+        styles = STATUS_STYLES
         style = styles.get(
             status,
             {"icon": "•", "text": "#475467", "bg": "#F2F4F7"},

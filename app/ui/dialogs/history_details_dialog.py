@@ -29,6 +29,7 @@ class HistoryDetailsDialog(QDialog):
         description_text,
         history_id,
         restore_handler,
+        can_restore: bool = True,
         parent=None,
     ):
         super().__init__(parent)
@@ -37,6 +38,7 @@ class HistoryDetailsDialog(QDialog):
         self.description_text = description_text or ""
         self.history_id = history_id
         self.restore_handler = restore_handler
+        self.can_restore = bool(can_restore and restore_handler is not None)
 
         self.setWindowTitle("Подробности изменения")
         self.setMinimumSize(900, 550)
@@ -130,7 +132,9 @@ class HistoryDetailsDialog(QDialog):
         )
         close_button.clicked.connect(self.accept)
 
-        footer.addWidget(restore_button)
+        restore_button.setVisible(self.can_restore)
+        if self.can_restore:
+            footer.addWidget(restore_button)
         footer.addStretch()
         footer.addWidget(close_button)
         main_layout.addLayout(footer)

@@ -10,6 +10,8 @@ HISTORY_ACTION_LABELS = {
     "pin": "Закрепление",
     "unpin": "Открепление",
     "restore": "Восстановление",
+    "merge_import": "Импорт при слиянии",
+    "conflict_resolved": "Разрешение конфликта",
     "bulk_update": "Массовое изменение",
     "bulk_status": "Массовая смена статуса",
     "bulk_due": "Массовое изменение срока",

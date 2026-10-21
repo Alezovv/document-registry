@@ -414,7 +414,7 @@ class ImportDocumentDialog(QDialog):
             event.ignore()
 
     def start_ocr(self):
-        if self._closing or self.pdf_path is None:
+        if self._closing or self._cancel_requested or self.pdf_path is None:
             return
         if self.worker is not None:
             if self.worker.isRunning():
@@ -443,7 +443,7 @@ class ImportDocumentDialog(QDialog):
         self.worker.start()
 
     def ocr_progress(self, value: int, message: str):
-        if self._closing:
+        if self._closing or self._cancel_requested:
             return
         self.progress.show()
         value = max(0, min(100, value))
@@ -453,7 +453,7 @@ class ImportDocumentDialog(QDialog):
         self.status_label.setText(message)
 
     def ocr_finished(self, ocr_data):  # Заменили text: str на ocr_data
-        if self._closing:
+        if self._closing or self._cancel_requested:
             return
         self._current_ocr_data = ocr_data
         self.progress.setValue(58)
@@ -465,7 +465,7 @@ class ImportDocumentDialog(QDialog):
         self.start_parser(ocr_data)
 
     def start_parser(self, ocr_data):
-        if self._closing:
+        if self._closing or self._cancel_requested:
             return
         if self.parser_worker is not None:
             if self.parser_worker.isRunning():
@@ -490,7 +490,7 @@ class ImportDocumentDialog(QDialog):
         self.parser_worker.start()
 
     def parser_progress(self, value: int, message: str):
-        if self._closing:
+        if self._closing or self._cancel_requested:
             return
         value = max(0, min(100, value))
         self.progress.setValue(value)
@@ -499,7 +499,7 @@ class ImportDocumentDialog(QDialog):
         self.status_label.setText(message)
 
     def parser_finished(self, payload):
-        if self._closing:
+        if self._closing or self._cancel_requested:
             return
         self.progress.setValue(90)
         self.status_label.setText("Проверка данных...")
@@ -568,7 +568,7 @@ class ImportDocumentDialog(QDialog):
         self._try_start_next_pdf()
 
     def parser_error(self, message: str):
-        if self._closing:
+        if self._closing or self._cancel_requested:
             return
         self.progress.setValue(100)
         self.error_count += 1
@@ -603,7 +603,7 @@ class ImportDocumentDialog(QDialog):
         self._try_start_next_pdf()
 
     def ocr_error(self, message: str):
-        if self._closing:
+        if self._closing or self._cancel_requested:
             return
         self.progress.hide()
         self.error_count += 1
@@ -990,6 +990,19 @@ class ImportDocumentDialog(QDialog):
             self.parser_worker.requestInterruption()
         if self.worker is None and self.parser_worker is None:
             self._finish_cancel()
+
+    def stop_workers_and_wait(self, timeout_ms: int = 3000) -> None:
+        """Safely request cancellation and wait for background OCR/parser threads."""
+        self._closing = True
+        self._cancel_requested = True
+        self.processing = False
+        self.pdf_queue.clear()
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(timeout_ms)
+        if self.parser_worker is not None and self.parser_worker.isRunning():
+            self.parser_worker.requestInterruption()
+            self.parser_worker.wait(timeout_ms)
 
     def closeEvent(self, event):
         if self._has_active_work():

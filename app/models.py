@@ -50,3 +50,15 @@ class Request:
 
     def display_status(self, reference_date: date | None = None) -> str:
         return "Просрочен" if self.is_overdue(reference_date) else (self.status or "Новый")
+
+
+@dataclass
+class CaseRecord:
+    """User-managed case grouping for related requests."""
+
+    id: Optional[int] = None
+    title: str = ""
+    note: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    request_count: int = 0

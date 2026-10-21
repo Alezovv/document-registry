@@ -121,10 +121,11 @@ class LegacyImportService:
             return None
         raw = Path(value).expanduser()
         candidates: list[Path] = []
-        if raw.is_absolute():
-            candidates.append(raw)
-        else:
-            candidates.append(source_db.parent / raw)
+        if ".." not in raw.parts:
+            if raw.is_absolute():
+                candidates.append(raw)
+            else:
+                candidates.append(source_db.parent / raw)
         basename = raw.name
         if documents_dir is not None and basename:
             candidates.append(documents_dir / basename)
@@ -144,7 +145,7 @@ class LegacyImportService:
                 continue
             seen.add(key)
             try:
-                if candidate.is_file():
+                if candidate.is_file() and candidate.suffix.lower() == ".pdf":
                     return candidate.resolve(strict=False)
             except OSError:
                 continue
@@ -342,23 +343,81 @@ class LegacyImportService:
         return staged_db, staged_docs, imported, copied, missing
 
     def _replace_current(self, staged_db: Path, staged_docs: Path) -> None:
-        db_path = self.database.db_path
+        db_path = Path(self.database.db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        for suffix in ("-wal", "-shm"):
-            Path(str(db_path) + suffix).unlink(missing_ok=True)
+        if db_path.exists() and not db_path.is_file():
+            raise LegacyImportError("Путь рабочей базы данных занят не файлом.")
 
-        staged_target_db = db_path.with_name(f".{db_path.name}.legacy_import")
-        shutil.copy2(staged_db, staged_target_db)
-        staged_target_db.replace(db_path)
+        if db_path.is_file():
+            # Never replace an existing database file after an online-backup
+            # failure: its WAL may still contain committed user data. In that
+            # case fail closed and let the outer migration workflow attempt its
+            # verified backup restore rather than deleting live sidecars.
+            source_conn = None
+            target_conn = None
+            try:
+                source_conn = sqlite3.connect(staged_db, timeout=10.0)
+                target_conn = sqlite3.connect(db_path, timeout=15.0)
+                target_conn.execute("PRAGMA busy_timeout = 10000")
+                source_conn.backup(target_conn)
+            except sqlite3.Error as error:
+                raise LegacyImportError(
+                    "Не удалось безопасно заменить рабочую базу данных: "
+                    f"{error}. Файлы WAL/SHM сохранены; перенос остановлен."
+                ) from error
+            finally:
+                if target_conn is not None:
+                    target_conn.close()
+                if source_conn is not None:
+                    source_conn.close()
+        else:
+            # A missing main file combined with SQLite sidecars is ambiguous:
+            # do not remove those files or install a replacement over them.
+            sidecars = [Path(str(db_path) + suffix) for suffix in ("-wal", "-shm")]
+            if any(path.exists() for path in sidecars):
+                raise LegacyImportError(
+                    "Основной файл базы отсутствует, но остались WAL/SHM-файлы. "
+                    "Перенос остановлен, чтобы не повредить данные."
+                )
+            staged_target_db = db_path.with_name(f".{db_path.name}.legacy_import")
+            try:
+                shutil.copy2(staged_db, staged_target_db)
+                staged_target_db.replace(db_path)
+            except OSError as error:
+                raise LegacyImportError(f"Не удалось установить новую базу данных: {error}") from error
+            finally:
+                staged_target_db.unlink(missing_ok=True)
 
         target_docs = self.documents.documents_dir
         temp_docs = target_docs.with_name(f".{target_docs.name}.legacy_import")
+        previous_docs = target_docs.with_name(f".{target_docs.name}.legacy_import_previous")
+        # A previous process may have crashed after moving the live directory
+        # aside but before installing the staged directory. Recover that sole
+        # remaining copy before cleaning temporary paths or starting a new swap.
+        if previous_docs.exists():
+            if not target_docs.exists():
+                previous_docs.replace(target_docs)
+            else:
+                shutil.rmtree(previous_docs)
         if temp_docs.exists():
             shutil.rmtree(temp_docs)
         shutil.copytree(staged_docs, temp_docs)
-        if target_docs.exists():
-            shutil.rmtree(target_docs)
-        temp_docs.replace(target_docs)
+        moved_old_docs = False
+        try:
+            if target_docs.exists():
+                target_docs.replace(previous_docs)
+                moved_old_docs = True
+            temp_docs.replace(target_docs)
+        except Exception:
+            if moved_old_docs and previous_docs.exists() and not target_docs.exists():
+                previous_docs.replace(target_docs)
+            raise
+        else:
+            if previous_docs.exists():
+                shutil.rmtree(previous_docs, ignore_errors=True)
+        finally:
+            if temp_docs.exists():
+                shutil.rmtree(temp_docs, ignore_errors=True)
 
         # Legacy history/trash does not describe the migrated dataset. Start with
         # an empty recovery trash; the pre-import backup keeps the previous one.

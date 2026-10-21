@@ -31,6 +31,8 @@ _ACTION_COLORS = {
     "pin": "#F59E0B",
     "unpin": "#667085",
     "restore": "#0EA5E9",
+    "merge_import": "#087443",
+    "conflict_resolved": "#7C3AED",
 }
 
 
@@ -394,12 +396,20 @@ class HistoryPage(QWidget):
             )
 
         history_id = date_item.data(Qt.ItemDataRole.UserRole + 1) if date_item else None
+        can_restore = False
+        if history_id:
+            try:
+                record = self.request_service.database.get_history_record(history_id)
+                can_restore = bool(record and record["snapshot"])
+            except Exception:
+                can_restore = False
         dialog = HistoryDetailsDialog(
             date_text=date_item.text() if date_item else "",
             action_text=action_item.text() if action_item else "",
             description_text=description_text,
             history_id=history_id,
             restore_handler=self._restore_history,
+            can_restore=can_restore,
             parent=self,
         )
         dialog.exec()
