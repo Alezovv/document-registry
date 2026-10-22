@@ -1,8 +1,8 @@
 ﻿param(
     [string]$Python = "python",
-    [string]$Version = "1.30.1",
+    [string]$Version = "1.30.2",
     [string]$PublishTo = "",
-    [string]$ReleaseNotes = "DocumentRegistry 1.30.1: Безопасный откат обновлений, безопасное восстановление снимков БД, слияние БД без потери записей, защита от zip-бомб и Excel formula injection, экспорт всех записей выборки.",
+    [string]$ReleaseNotes = "DocumentRegistry 1.30.2: Исправление жизненного цикла окон при закрытии, безопасный откат и восстановление БД, ускорение парсера, защита от formula injection и zip-бомб.",
     [string]$PackageFileId = "",
     [switch]$PublishExisting,
     [switch]$ManifestOnly
@@ -518,7 +518,9 @@ function Publish-UpdatePackage(
         }
         Write-JsonUtf8NoBom $InternalManifest (Join-Path $Stage "update_manifest.json") 4
 
-        Compress-Archive -Path (Join-Path $Stage "*") -DestinationPath $LocalPackage -CompressionLevel Optimal -Force
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $LocalPackage -Force -ErrorAction SilentlyContinue
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($Stage, $LocalPackage, [System.IO.Compression.CompressionLevel]::Optimal, $false)
         Require-File $LocalPackage "update package"
 
         $Hash = (Get-FileHash -LiteralPath $LocalPackage -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -704,9 +706,11 @@ New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null
 New-ReleaseZipWithRetry $PortableDir $ReleaseZip
 Require-File $ReleaseZip "release ZIP"
 
-if (-not [string]::IsNullOrWhiteSpace($PublishTo)) {
-    Publish-UpdatePackage $PortableDir $PublishTo $Version $ReleaseNotes
-}
+# Copy standalone updater executable into release folder
+Copy-Item (Join-Path $UpdaterDir "DocumentRegistryUpdater.exe") (Join-Path $ReleaseDir "DocumentRegistryUpdater.exe") -Force
+
+$TargetPublishDir = if (-not [string]::IsNullOrWhiteSpace($PublishTo)) { $PublishTo } else { $ReleaseDir }
+Publish-UpdatePackage $PortableDir $TargetPublishDir $Version $ReleaseNotes
 
 # build\ and dist\ are temporary. Keep them only when build/publish fails so they
 # can be inspected. Once all requested work succeeds, remove both directories.
