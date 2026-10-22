@@ -34,7 +34,7 @@ class BertWordPieceTokenizer:
 
     def __init__(self, vocab_file: str | Path):
         self.vocab_file = Path(vocab_file)
-        tokens = self.vocab_file.read_text(encoding="utf-8").splitlines()
+        tokens = self.vocab_file.read_text(encoding="utf-8-sig").splitlines()
         if not tokens:
             raise RuntimeError(f"Пустой словарь NER: {self.vocab_file}")
         self.vocab = {token: index for index, token in enumerate(tokens)}
@@ -450,17 +450,31 @@ class OnnxRussianNerEngine(NerEngine):
             e_start, e_end = int(ent_span[0]), int(ent_span[1])
             chosen_block = spans[0][2]
             local_start, local_end = e_start, e_end
+            overlapping_blocks: list[dict[str, Any]] = []
+            source_spans: list[dict[str, Any]] = []
             for b_start, b_end, block in spans:
+                # Keep every OCR block overlapped by the entity. Names frequently
+                # wrap at a line boundary; retaining only the block containing
+                # the first character loses the rest of the visual evidence.
+                overlap_start = max(e_start, b_start)
+                overlap_end = min(e_end, b_end)
+                if overlap_end <= overlap_start:
+                    continue
                 if b_start <= e_start < b_end:
                     chosen_block = block
                     local_start = max(0, e_start - b_start)
                     local_end = max(local_start, min(b_end - b_start, e_end - b_start))
-                    break
+                overlapping_blocks.append(dict(block))
+                source_spans.append({
+                    "block_index": block.get("block_index"),
+                    "span": [max(0, overlap_start - b_start), max(0, overlap_end - b_start)],
+                })
             entity.page_index = self._page(chosen_block)
-            entity.source_blocks = [dict(chosen_block)]
+            entity.source_blocks = overlapping_blocks or [dict(chosen_block)]
             entity.metadata = {
                 **dict(entity.metadata),
                 "span": [local_start, local_end],
+                "source_spans": source_spans,
             }
             mapped.append(entity)
         return mapped, token_count, elapsed

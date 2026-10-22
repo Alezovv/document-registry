@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtCore import QThread
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from shiboken6 import isValid
 
 logger = logging.getLogger(__name__)
@@ -42,8 +43,109 @@ class WindowLifecycleMixin:
                 pass
         return valid_dialogs
 
+    def _running_shutdown_tasks(self) -> list[str]:
+        """Return names of workers that must finish before MainWindow is destroyed."""
+        tasks: list[tuple[str, object | None]] = []
+
+        diagnostics = getattr(self, "ocr_diagnostics_controller", None)
+        tasks.append(("диагностика OCR", getattr(diagnostics, "_thread", None)))
+
+        backup = getattr(self, "backup_controller", None)
+        tasks.append(("резервное копирование", getattr(backup, "worker", None)))
+
+        legacy = getattr(self, "legacy_import_controller", None)
+        tasks.append(("импорт старой базы", getattr(legacy, "worker", None)))
+
+        search = getattr(self, "search_index_controller", None)
+        tasks.append(("обновление поискового индекса", getattr(search, "worker", None)))
+
+        export = getattr(self, "export_controller", None)
+        tasks.append(("экспорт Excel", getattr(export, "worker", None)))
+
+        shahmatka = getattr(self, "shahmatka_page", None)
+        tasks.append(("генерация шахматки", getattr(shahmatka, "_generation_worker", None)))
+
+        updates = getattr(self, "update_controller", None)
+        for attr, label in (
+            ("_check_thread", "проверка обновлений"),
+            ("_rollback_check_thread", "список версий для отката"),
+            ("_prepare_thread", "подготовка пакета обновления"),
+            ("_rollback_backup_thread", "резервная копия перед откатом"),
+        ):
+            tasks.append((label, getattr(updates, attr, None)))
+
+        importer = getattr(self, "import_controller", None)
+        dialog = getattr(importer, "dialog", None)
+        if dialog is not None:
+            tasks.append(("OCR-обработка документов", getattr(dialog, "worker", None)))
+            tasks.append(("разбор результата OCR", getattr(dialog, "parser_worker", None)))
+
+        # Include Qt workers parented to the main window. Some controllers
+        # create their QThreads without a QObject parent, hence the explicit
+        # references collected above are still necessary.
+        try:
+            tasks.extend(("фоновая задача Qt", thread) for thread in self.findChildren(QThread))
+        except Exception:
+            pass
+
+        running: list[str] = []
+        seen: set[int] = set()
+        for label, thread in tasks:
+            if thread is None or id(thread) in seen:
+                continue
+            seen.add(id(thread))
+            try:
+                if thread.isRunning():
+                    running.append(label)
+            except RuntimeError:
+                # The underlying C++ object has already been deleted.
+                continue
+            except Exception:
+                logger.debug("Не удалось проверить состояние потока %s", label, exc_info=True)
+        return running
+
     def closeEvent(self, event):
         """Cleanly close all dialogs and terminate/interrupt background tasks."""
+        updates = getattr(self, "update_controller", None)
+        if getattr(updates, "install_in_progress", False):
+            # The updater hand-off pumps Qt events. Reject re-entrant close
+            # events while a safety backup is running or the updater is taking
+            # ownership of the installation directory.
+            event.ignore()
+            return
+
+        # A few long-running workers do not support safe mid-operation cancellation
+        # (database restore/merge, XLSX exports and chessboard generation). Check
+        # them before force-closing their parent dialogs/widgets.
+        non_cancellable: list[str] = []
+        try:
+            for thread in self.findChildren(QThread):
+                try:
+                    if not thread.isRunning():
+                        continue
+                    worker_name = type(thread).__name__
+                    labels = {
+                        "_DatabaseOperationWorker": "восстановление/слияние базы данных",
+                        "ExportWorker": "экспорт Excel",
+                        "ShahmatkaWorker": "генерация шахматки",
+                    }
+                    if worker_name in labels:
+                        non_cancellable.append(labels[worker_name])
+                except RuntimeError:
+                    continue
+        except Exception:
+            logger.debug("Не удалось выполнить предварительную проверку потоков", exc_info=True)
+        if non_cancellable:
+            event.ignore()
+            details = ", ".join(dict.fromkeys(non_cancellable))
+            QMessageBox.information(
+                self,
+                "Операции ещё выполняются",
+                "Программа не будет закрыта, пока завершаются операции:\n"
+                f"{details}\n\nПовторите закрытие после завершения.",
+            )
+            return
+
         self._is_closing = True
 
         # 1. Close import controller dialogs and stop OCR workers
@@ -151,5 +253,27 @@ class WindowLifecycleMixin:
                             widget.reject()
                 except Exception:
                     pass
+
+        # Never destroy a QObject tree while one of its QThreads still runs.
+        # A bounded wait keeps shutdown responsive; if native OCR/SQLite/file
+        # I/O has not yielded yet, keep the main window alive and let the user
+        # close it again once cancellation completes.
+        still_running = self._running_shutdown_tasks()
+        if still_running:
+            self._is_closing = False
+            for name in ("import_controller", "request_controller"):
+                controller = getattr(self, name, None)
+                if controller is not None and hasattr(controller, "_is_closing"):
+                    controller._is_closing = False
+            event.ignore()
+            details = ", ".join(dict.fromkeys(still_running))
+            QMessageBox.information(
+                self,
+                "Завершение операций",
+                "Программа ещё останавливает фоновые операции:\n"
+                f"{details}\n\n"
+                "Данные не будут закрыты принудительно. Подождите завершения остановки и повторите закрытие.",
+            )
+            return
 
         event.accept()

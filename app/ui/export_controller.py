@@ -19,8 +19,8 @@ class ExportWorker(QThread):
     succeeded = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, export_service: ExportService, requests, destination: str):
-        super().__init__()
+    def __init__(self, export_service: ExportService, requests, destination: str, parent=None):
+        super().__init__(parent)
         self.export_service = export_service
         self.requests = requests
         self.destination = destination
@@ -31,10 +31,12 @@ class ExportWorker(QThread):
         except Exception:
             pass
         try:
+            # The controller must provide a materialized snapshot. Calling an
+            # arbitrary data-source function here could touch GUI objects or a
+            # SQLite connection created in the main thread.
             if callable(self.requests):
-                items = list(self.requests())
-            else:
-                items = self.requests
+                raise ExportError("Перед запуском экспорта необходимо подготовить снимок записей в GUI-потоке.")
+            items = self.requests
             if not items:
                 raise ExportError("В текущей выборке нет записей для экспорта.")
             result = self.export_service.export_xlsx(items, self.destination)
@@ -84,16 +86,35 @@ class ExportController(QObject):
         if not path:
             return
 
-        # Snapshot dataclass values if list, or pass callable to be resolved in worker thread
-        if not is_callable:
+        # Resolve callable sources on the GUI thread, before QThread starts, so
+        # SQLite connections and any UI-backed query function stay thread-affine.
+        if is_callable:
             try:
-                snapshot = [replace(request) for request in requests]
-            except (TypeError, ValueError):
-                snapshot = requests
-        else:
-            snapshot = requests
+                requests = list(requests())
+            except Exception as error:
+                logger.exception("Не удалось получить данные для экспорта")
+                QMessageBox.critical(
+                    self.parent_widget,
+                    "Ошибка экспорта",
+                    f"Не удалось подготовить данные для экспорта: {error}",
+                )
+                return
+            if not requests:
+                self.toast_requested.emit(
+                    "Экспорт Excel",
+                    "В текущей выборке нет записей для экспорта.",
+                    "info",
+                )
+                return
 
-        self.worker = ExportWorker(self.export_service, snapshot, path)
+        try:
+            snapshot = [replace(request) for request in requests]
+        except (TypeError, ValueError):
+            # Some callers may export mapping/tuple-like rows rather than Request
+            # dataclasses. Still freeze the iterable in the calling thread.
+            snapshot = list(requests)
+
+        self.worker = ExportWorker(self.export_service, snapshot, path, parent=self)
 
         self.worker.succeeded.connect(self._on_export_succeeded)
         self.worker.failed.connect(self._on_export_failed)

@@ -5,6 +5,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
+import threading
+import time
 from typing import Any
 
 from app.models import Request
@@ -14,6 +17,19 @@ OCR_ALGO_VERSION = "1.30.0"
 PARSE_RULES_REVISION = "1.30.0"
 DEFAULT_MAX_ENTRIES = 400
 DEFAULT_MAX_BYTES = 96 * 1024 * 1024
+
+_CACHE_LOCKS_GUARD = threading.Lock()
+_CACHE_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _lock_for_cache_dir(cache_dir: Path) -> threading.RLock:
+    key = os.path.normcase(str(cache_dir.resolve(strict=False)))
+    with _CACHE_LOCKS_GUARD:
+        lock = _CACHE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _CACHE_LOCKS[key] = lock
+        return lock
 
 
 class ParserCache:
@@ -36,6 +52,9 @@ class ParserCache:
         self.max_entries = max(20, int(max_entries))
         self.max_bytes = max(8 * 1024 * 1024, int(max_bytes))
         self._writes_since_prune = 0
+        # Instances targeting the same directory share a lock, so simultaneous
+        # OCR/parser workers cannot overwrite each other's read-modify-write.
+        self._write_lock = _lock_for_cache_dir(self.cache_dir)
 
     @staticmethod
     def content_hash(path: str | Path) -> str:
@@ -130,17 +149,18 @@ class ParserCache:
         cache_key: str | None = None,
     ) -> str:
         key = cache_key or self.content_hash(pdf_path)
-        entry = self._read_key(key) or {"format_version": CACHE_FORMAT_VERSION}
-        entry["pdf_size"] = self._safe_size(pdf_path)
-        ocr_payload = {
-            "algo_version": OCR_ALGO_VERSION,
-            "text": str(ocr_data.get("text", "")),
-            "blocks": list(ocr_data.get("blocks") or []),
-        }
-        if "_preparsed" in ocr_data and isinstance(ocr_data["_preparsed"], dict):
-            ocr_payload["_preparsed"] = dict(ocr_data["_preparsed"])
-        entry["ocr"] = ocr_payload
-        self._write_key(key, entry)
+        with self._write_lock:
+            entry = self._read_key(key) or {"format_version": CACHE_FORMAT_VERSION}
+            entry["pdf_size"] = self._safe_size(pdf_path)
+            ocr_payload = {
+                "algo_version": OCR_ALGO_VERSION,
+                "text": str(ocr_data.get("text", "")),
+                "blocks": list(ocr_data.get("blocks") or []),
+            }
+            if "_preparsed" in ocr_data and isinstance(ocr_data["_preparsed"], dict):
+                ocr_payload["_preparsed"] = dict(ocr_data["_preparsed"])
+            entry["ocr"] = ocr_payload
+            self._write_key(key, entry)
         return key
 
     def save_parse(
@@ -153,52 +173,87 @@ class ParserCache:
         cache_key: str | None = None,
     ) -> str:
         key = cache_key or self.content_hash(pdf_path)
-        entry = self._read_key(key) or {"format_version": CACHE_FORMAT_VERSION}
-        entry["pdf_size"] = self._safe_size(pdf_path)
-        entry["parser_version"] = parser_version
-        entry["rules_revision"] = PARSE_RULES_REVISION
-        # Cache only fields represented by Request. Runtime ids/source paths are
-        # deliberately excluded from parsed inference.
-        request_data = asdict(request)
-        request_data["id"] = None
-        request_data["source_document"] = ""
-        entry["request"] = request_data
-        entry["diagnostics"] = diagnostics
-        self._write_key(key, entry)
+        with self._write_lock:
+            entry = self._read_key(key) or {"format_version": CACHE_FORMAT_VERSION}
+            entry["pdf_size"] = self._safe_size(pdf_path)
+            entry["parser_version"] = parser_version
+            entry["rules_revision"] = PARSE_RULES_REVISION
+            # Cache only fields represented by Request. Runtime ids/source paths are
+            # deliberately excluded from parsed inference.
+            request_data = asdict(request)
+            request_data["id"] = None
+            request_data["source_document"] = ""
+            entry["request"] = request_data
+            entry["diagnostics"] = diagnostics
+            self._write_key(key, entry)
         return key
 
     def _write_key(self, cache_key: str, payload: dict[str, Any]) -> None:
         target = self._entry_path(cache_key)
-        temp = target.with_suffix(".json.tmp")
         text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=self._json_default)
-        temp.write_text(text, encoding="utf-8")
-        os.replace(temp, target)
-        self._writes_since_prune += 1
-        custom_limits = (
-            self.max_entries < DEFAULT_MAX_ENTRIES
-            or self.max_bytes < DEFAULT_MAX_BYTES
-        )
-        if custom_limits or self._writes_since_prune >= 20:
-            self._writes_since_prune = 0
-            self.prune()
+        temp_name: str | None = None
+        temp_fd: int | None = None
+        with self._write_lock:
+            try:
+                temp_fd, temp_name = tempfile.mkstemp(
+                    prefix=f".{target.name}.", suffix=".tmp", dir=self.cache_dir
+                )
+                with os.fdopen(temp_fd, "w", encoding="utf-8", newline="") as stream:
+                    temp_fd = None  # fdopen now owns the descriptor
+                    stream.write(text)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp_name, target)
+                temp_name = None
+                self._writes_since_prune += 1
+                custom_limits = (
+                    self.max_entries < DEFAULT_MAX_ENTRIES
+                    or self.max_bytes < DEFAULT_MAX_BYTES
+                )
+                if custom_limits or self._writes_since_prune >= 20:
+                    self._writes_since_prune = 0
+                    self.prune()
+            finally:
+                if temp_fd is not None:
+                    try:
+                        os.close(temp_fd)
+                    except OSError:
+                        pass
+                if temp_name is not None:
+                    try:
+                        Path(temp_name).unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     def prune(self) -> None:
-        entries = []
-        for path in self.cache_dir.glob("*.json"):
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            entries.append((stat.st_mtime_ns, stat.st_size, path))
-        entries.sort(reverse=True)
-        total = 0
-        for index, (_mtime, size, path) in enumerate(entries):
-            total += size
-            if index >= self.max_entries or total > self.max_bytes:
+        with self._write_lock:
+            # Crash leftovers use hidden unique temp names. Remove only files
+            # older than 24 hours so a concurrent writer's active temp file is
+            # never mistaken for an orphan.
+            stale_before_ns = time.time_ns() - 24 * 60 * 60 * 1_000_000_000
+            for temp_path in self.cache_dir.glob(".*.json.*.tmp"):
                 try:
-                    path.unlink()
+                    if temp_path.is_file() and temp_path.stat().st_mtime_ns < stale_before_ns:
+                        temp_path.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+            entries = []
+            for path in self.cache_dir.glob("*.json"):
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                entries.append((stat.st_mtime_ns, stat.st_size, path))
+            entries.sort(reverse=True)
+            total = 0
+            for index, (_mtime, size, path) in enumerate(entries):
+                total += size
+                if index >= self.max_entries or total > self.max_bytes:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
 
     @staticmethod
     def _safe_size(path: str | Path) -> int:

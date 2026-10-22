@@ -49,7 +49,10 @@ class DiagnosticsController:
         dialog.install_ui_test_requested.connect(self.test_install_window)
         dialog.rebuild_search_requested.connect(self.rebuild_search_index)
         dialog.duplicate_scan_requested.connect(self.scan_duplicates)
-        dialog.exec()
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     def rebuild_search_index(self) -> None:
         try:

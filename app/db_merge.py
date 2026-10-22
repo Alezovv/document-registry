@@ -502,16 +502,29 @@ class DatabaseMergeService:
     ) -> str:
         """Скопировать PDF-файл в локальный каталог documents с уникальным именем."""
         self.documents_dir.mkdir(parents=True, exist_ok=True)
-        dest_name = self._unique_name(self.documents_dir, source_file.name, reserved_names)
-        dest_path = self.documents_dir / dest_name
+        safe_source_name = Path(source_file.name).name or "document.pdf"
+        candidate_dest = self.documents_dir / safe_source_name
 
-        if source_file.resolve() != dest_path.resolve():
-            created_files = getattr(self, "_merge_created_files", None)
-            if created_files is not None:
-                # Register before copying so a partially written destination is
-                # also removed if copy2 raises midway through the operation.
-                created_files.append(dest_path)
-            shutil.copy2(source_file, dest_path)
+        # After a version rollback the source PDF may already be stored in the
+        # active documents directory. Check identity BEFORE reserving a unique
+        # name; otherwise the existing file makes _unique_name return "(2).pdf"
+        # and the old check below can never detect the same-file case.
+        try:
+            if source_file.resolve() == candidate_dest.resolve():
+                return encode_runtime_path(candidate_dest, self.runtime_root)
+        except OSError:
+            # Continue through the normal copy path; Path.resolve failures must
+            # not turn an unverified file into a successful same-file match.
+            pass
+
+        dest_name = self._unique_name(self.documents_dir, safe_source_name, reserved_names)
+        dest_path = self.documents_dir / dest_name
+        created_files = getattr(self, "_merge_created_files", None)
+        if created_files is not None:
+            # Register before copying so a partially written destination is
+            # also removed if copy2 raises midway through the operation.
+            created_files.append(dest_path)
+        shutil.copy2(source_file, dest_path)
 
         return encode_runtime_path(dest_path, self.runtime_root)
 
@@ -562,7 +575,12 @@ class DatabaseMergeService:
         if found_file:
             new_source_doc = self._copy_document_to_runtime(found_file, reserved_names)
 
-        cols = [
+        # Read the destination schema at runtime. A hard-coded column list
+        # silently discards fields introduced by newer migrations when merging
+        # a database from a later version. Preserve every column present in both
+        # the destination schema and the source record, while retaining explicit
+        # safe defaults for the long-standing request fields.
+        standard_cols = {
             "received_date",
             "due_date",
             "completed_date",
@@ -577,24 +595,38 @@ class DatabaseMergeService:
             "is_pinned",
             "source_sha256",
             "source_size_bytes",
+        }
+        destination_columns = [
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(requests)").fetchall()
+            if str(row[1]) != "id"
+        ]
+        record_keys = set(record)
+        cols = [
+            column for column in destination_columns
+            if column in record_keys or column in standard_cols
         ]
         values = []
-        for c in cols:
-            val = record.get(c)
-            if c == "source_document":
+        for column in cols:
+            value = record.get(column)
+            if column == "source_document":
                 values.append(new_source_doc or "")
-            elif c == "is_pinned":
-                values.append(int(val or 0))
-            elif c == "source_size_bytes":
-                values.append(int(val or 0))
-            elif c == "source_sha256":
-                values.append(str(val or ""))
-            elif c == "received_date":
-                values.append(str(val or record.get("created_at") or datetime.now().strftime("%d.%m.%Y")))
-            elif c == "status":
-                values.append(str(val or "Новый"))
+            elif column == "is_pinned":
+                values.append(int(value or 0))
+            elif column == "source_size_bytes":
+                values.append(int(value or 0))
+            elif column == "source_sha256":
+                values.append(str(value or ""))
+            elif column == "received_date":
+                values.append(str(value or record.get("created_at") or datetime.now().strftime("%d.%m.%Y")))
+            elif column == "status":
+                values.append(str(value or "Новый"))
+            elif column in standard_cols:
+                values.append(str(value or ""))
             else:
-                values.append(str(val or ""))
+                # Newly migrated columns keep their original SQLite value/type;
+                # omitted columns not present in the source use schema defaults.
+                values.append(value)
 
         placeholders = ", ".join(["?"] * len(cols))
         cur = conn.execute(
@@ -843,16 +875,17 @@ class DatabaseMergeService:
                 )
 
     def _create_pre_merge_backup(self, backup_service):
-        """Создать защитную копию рабочей БД перед операцией слияния."""
+        """Создать уникальную защитную копию рабочей БД перед слиянием."""
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         if backup_service and hasattr(backup_service, "create_backup"):
             try:
-                backup_service.create_backup("pre_merge")
+                backup_service.create_backup(f"pre_merge_{stamp}")
                 return
             except Exception as e:
                 logger.warning("BackupService.create_backup failed: %s, falling back to direct copy", e)
 
         backup_file = self.current_db_path.with_name(
-            f"{self.current_db_path.stem}.pre_merge_backup{self.current_db_path.suffix}"
+            f"{self.current_db_path.stem}.pre_merge_backup_{stamp}{self.current_db_path.suffix}"
         )
         try:
             with closing(sqlite3.connect(str(self.current_db_path), timeout=30.0)) as src, closing(sqlite3.connect(str(backup_file))) as dst:

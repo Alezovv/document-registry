@@ -44,9 +44,12 @@ def sanitize_excel_value(value: object) -> object:
     text = _ILLEGAL_XML_CHARS_RE.sub("", text)
     stripped = text.lstrip()
     if stripped.startswith(("=", "@")):
-        return "'" + text
+        # Put the escape marker directly before the dangerous expression.
+        # Keeping untrusted leading whitespace after it can be normalized away
+        # by spreadsheet/CSV import flows before formula detection.
+        return "'" + stripped
     if _DDE_PATTERN.search(stripped):
-        return "'" + text
+        return "'" + stripped
     return text
 
 

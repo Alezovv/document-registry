@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from difflib import SequenceMatcher
+from app.document_parser_parts.similarity import ratio_upper_bound
 from typing import Any
 
 from app.models import Request
@@ -22,8 +23,9 @@ class NormalizationMixin:
     @classmethod
     def _label_key(cls, value: str) -> str:
         value = unicodedata.normalize("NFKC", value or "").lower().replace("ё", "е")
-        # OCR often recognizes the letter О in short uppercase labels as zero.
-        value = value.replace("0", "о")
+        # Correct an OCR zero only when it is embedded between letters. Do not
+        # rewrite real zeros in document numbers, dates, or numbered labels.
+        value = re.sub(r"(?<=[а-яa-z])0(?=[а-яa-z])", "о", value)
         value = re.sub(r"[^а-яa-z0-9]+", " ", value)
         return re.sub(r"\s+", " ", value).strip()
 
@@ -67,6 +69,11 @@ class NormalizationMixin:
                 # lines so normal prose never becomes a field label by accident.
                 if not remainder and len(key.split()) <= 4:
                     if key.startswith(("адрес", "по адрес", "на адрес")) and alias_key == "адресат":
+                        continue
+                    # Different-length labels cannot match above the bound;
+                    # avoid running SequenceMatcher for those pairs.
+                    max_score = ratio_upper_bound(key, alias_key)
+                    if max_score < 0.86 or (best is not None and max_score <= best[0]):
                         continue
                     score = SequenceMatcher(None, key, alias_key).ratio()
                     if score >= 0.86 and (best is None or score > best[0]):
@@ -406,10 +413,22 @@ class NormalizationMixin:
         return value[:160]
 
     _INDECLINABLE_SURNAME_ENDINGS = ("ко", "их", "ых", "иа", "уа", "дзе", "швили", "янц")
+    # These masculine adjectival surnames are easily confused with feminine
+    # oblique forms by a suffix-only normalizer. Keep their declensions explicit.
+    _MASCULINE_OY_SURNAME_FORMS = {
+        "яровой": "Яровой", "ярового": "Яровой", "яровому": "Яровой",
+        "яровым": "Яровой", "яровом": "Яровой",
+        "боровой": "Боровой", "борового": "Боровой", "боровому": "Боровой",
+        "боровым": "Боровой", "боровом": "Боровой",
+        "кривой": "Кривой", "кривого": "Кривой", "кривому": "Кривой",
+        "кривым": "Кривой", "кривом": "Кривой",
+    }
 
     @classmethod
     def _normalize_male_surname(cls, sur: str) -> str:
         sur_low = sur.lower()
+        if sur_low in cls._MASCULINE_OY_SURNAME_FORMS:
+            return cls._MASCULINE_OY_SURNAME_FORMS[sur_low]
         if sur_low.endswith(cls._INDECLINABLE_SURNAME_ENDINGS):
             return sur
         if sur_low.endswith(("овым", "евым", "иным", "яном")):
@@ -424,8 +443,9 @@ class NormalizationMixin:
             return sur[:-3]
         if sur_low.endswith(("ого", "ому")):
             return sur[:-3] + "ый"
-        if sur_low.endswith(("ым", "ом")):
-            return sur[:-2] + "ый"
+        # Do not infer an adjective ending from plain -ым/-ом. Nominative
+        # surnames such as «Пахом» or «Бергстром» may legitimately end this
+        # way; oblique forms of common -ов/-ев/-ин surnames are handled above.
         return sur
 
     @classmethod
@@ -437,7 +457,7 @@ class NormalizationMixin:
             return sur[:-2] + "а"
         if sur_low.endswith(("ову", "еву", "ину")):
             return sur[:-1] + "а"
-        if sur_low.endswith(("ской", "цкой", "ной", "вой")) or (
+        if sur_low.endswith(("ской", "цкой")) or (
             sur_low.endswith(("ой", "ую")) and not sur_low.endswith(("овой", "евой", "иной"))
         ):
             return sur[:-2] + "ая"
@@ -460,7 +480,11 @@ class NormalizationMixin:
                 return [sur, name]
 
         is_female = False
-        if sur_low.endswith(("овой", "евой", "иной", "ской", "цкой", "ая", "яя", "ной", "вой")):
+        if sur_low in {"яровой", "боровой", "кривой"}:
+            # These are attested masculine nominative surname forms, not
+            # feminine suffixes merely because they end in «-овой/-вой».
+            is_female = False
+        elif sur_low.endswith(("овой", "евой", "иной", "ской", "цкой", "ая", "яя")):
             is_female = True
         elif sur_low.endswith(("ову", "еву", "ину")):
             if name_low.endswith(("ию", "ью", "ии", "ьи", "а", "я")):
@@ -578,6 +602,8 @@ class NormalizationMixin:
     def _normalize_target_surname(cls, surname: str) -> str:
         val = surname.strip().capitalize()
         low = val.lower()
+        if low in cls._MASCULINE_OY_SURNAME_FORMS:
+            return cls._MASCULINE_OY_SURNAME_FORMS[low]
         if low.endswith(cls._INDECLINABLE_SURNAME_ENDINGS):
             return val
         for ending, replacement in (
@@ -590,7 +616,6 @@ class NormalizationMixin:
             ("ским", "ский"), ("цким", "цкий"),
             ("ском", "ский"), ("цком", "цкий"),
             ("ской", "ская"), ("цкой", "цкая"), ("жной", "жная"),
-            ("ной", "ная"), ("вой", "вая"),
         ):
             if low.endswith(ending) and len(val) > len(ending) + 1:
                 return val[:-len(ending)] + replacement
@@ -639,7 +664,7 @@ class NormalizationMixin:
         # several OCR lines.
         val = re.split(
             r"(?i)\b(?:приложени(?:е|я)|исполнитель|с уважением|телефон|тел\.|"
-            r"электронная почта|e-mail|начальник|заместитель|директор|и\.?\s*о\.?\s*(?:главн\w*\s+)?врач\w*|главн\w*\s+врач\w*|врач\w*)\b",
+            r"электронная почта|e-mail)\b",
             val, maxsplit=1,
         )[0]
         val = re.sub(r"\s+", " ", val).strip(" .,:;—–-?")

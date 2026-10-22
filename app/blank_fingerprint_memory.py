@@ -45,19 +45,19 @@ DEFAULT_FINGERPRINTS: list[dict[str, Any]] = [
     },
     {
         "department": "ОМВД России по Светлоярскому району",
-        "keywords": ["омвд россии по светлоярскому", "омвд по светлоярскому", "светлоярскому району"],
+        "keywords": ["омвд россии по светлоярскому", "омвд по светлоярскому"],
     },
     {
         "department": "ОМВД России по Калачевскому району",
-        "keywords": ["омвд россии по калачевскому", "омвд по калачевскому", "калачевскому району"],
+        "keywords": ["омвд россии по калачевскому", "омвд по калачевскому"],
     },
     {
         "department": "ОМВД России по Октябрьскому району",
-        "keywords": ["омвд россии по октябрьскому", "омвд по октябрьскому", "октябрьскому району"],
+        "keywords": ["омвд россии по октябрьскому", "омвд по октябрьскому"],
     },
     {
         "department": "ОМВД России по Котовскому району",
-        "keywords": ["омвд россии по котовскому", "омвд по котовскому", "котовскому району"],
+        "keywords": ["омвд россии по котовскому", "омвд по котовскому"],
     },
     {
         "department": "ОМВД России «Черноярский»",
@@ -284,8 +284,18 @@ class BlankFingerprintMemory:
                     continue
                 for kw in entry.get("keywords", []):
                     kw_norm = _normalize_header_key(kw)
-                    if kw_norm and kw_norm in norm:
-                        return dept_name
+                    if not kw_norm or kw_norm not in norm:
+                        continue
+                    # Old persisted fingerprints may still contain a broad
+                    # district-only keyword. For police departments, require an
+                    # explicit police/MVD marker in the header before accepting it.
+                    if (
+                        dept_name.strip().casefold().startswith("омвд")
+                        and "району" in kw_norm
+                        and not re.search(r"(?i)\b(?:омвд|мвд|умвд|полици\w*|отдел\s+полиции)\b", norm)
+                    ):
+                        continue
+                    return dept_name
 
         return None
 

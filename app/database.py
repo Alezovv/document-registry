@@ -439,8 +439,33 @@ class Database:
             row = conn.execute("SELECT COUNT(*) AS count FROM request_history").fetchone()
             return int(row["count"] if row is not None else 0)
 
+    @staticmethod
+    def _trim_history_conn(
+        conn: sqlite3.Connection,
+        *,
+        threshold: int = 2100,
+        keep_count: int = 2000,
+    ) -> int:
+        """Rotate history inside the caller's transaction after direct CRUD inserts."""
+        safe_threshold = max(1, int(threshold))
+        safe_keep = max(1, int(keep_count))
+        row = conn.execute("SELECT COUNT(*) AS count FROM request_history").fetchone()
+        count = int(row["count"] or 0) if row is not None else 0
+        if count <= safe_threshold:
+            return 0
+        cursor = conn.execute(
+            """
+            DELETE FROM request_history
+            WHERE id NOT IN (
+                SELECT id FROM request_history ORDER BY id DESC LIMIT ?
+            )
+            """,
+            (safe_keep,),
+        )
+        return cursor.rowcount
+
     def trim_history(self, keep_count: int = 2000) -> int:
-        """Keep only the latest keep_count records in request_history, trimming older ones."""
+        """Explicitly trim history to a requested number of newest records."""
         safe_keep = max(1, int(keep_count))
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -489,17 +514,7 @@ class Database:
                 """,
                 (request_id, action, description, snapshot),
             )
-            # Automatic rotation: when count exceeds 2100, trim back to 2000
-            row = conn.execute("SELECT COUNT(*) AS count FROM request_history").fetchone()
-            if row and int(row["count"] or 0) > 2100:
-                conn.execute(
-                    """
-                    DELETE FROM request_history
-                    WHERE id NOT IN (
-                        SELECT id FROM request_history ORDER BY id DESC LIMIT 2000
-                    )
-                    """
-                )
+            self._trim_history_conn(conn)
 
     def clear_history(self) -> None:
         with self._get_connection() as conn:
@@ -1163,6 +1178,7 @@ class Database:
                 """,
                 (request_id, f"Создан запрос (ID: {request_id})"),
             )
+            self._trim_history_conn(conn)
             for case_id in normalized_case_ids:
                 conn.execute(
                     "INSERT INTO case_requests(case_id, request_id) VALUES (?, ?)",
@@ -1212,6 +1228,7 @@ class Database:
                 "note": request.note or "",
                 "status": request.status or "Новый",
                 "source_document": self.encode_source_document(request.source_document),
+                "is_pinned": 1 if request.is_pinned else 0,
                 "source_sha256": str(request.source_sha256 or ""),
                 "source_size_bytes": int(request.source_size_bytes or 0),
             }
@@ -1228,6 +1245,7 @@ class Database:
                 "note": "Примечание",
                 "status": "Статус",
                 "source_document": "Документ",
+                "is_pinned": "Закрепление",
             }
 
             changes = []
@@ -1240,6 +1258,9 @@ class Database:
                 if field == "source_document":
                     old_display = portable_basename(old_value) if old_value else "нет"
                     new_display = portable_basename(new_value) if new_value else "нет"
+                elif field == "is_pinned":
+                    old_display = "да" if bool(old_values.get(field, 0)) else "нет"
+                    new_display = "да" if bool(new_values[field]) else "нет"
                 else:
                     old_display = old_value or "пусто"
                     new_display = new_value or "пусто"
@@ -1294,6 +1315,7 @@ class Database:
                         json.dumps(snapshot_data, ensure_ascii=False),
                     ),
                 )
+                self._trim_history_conn(conn)
 
     def delete_request(
         self,
@@ -1374,6 +1396,7 @@ class Database:
                     json.dumps(snapshot_data, ensure_ascii=False),
                 ),
             )
+            self._trim_history_conn(conn)
             conn.execute("DELETE FROM requests WHERE id = ?", (request_id,))
         return True
 
@@ -1451,6 +1474,7 @@ class Database:
                         json.dumps(snapshot_data, ensure_ascii=False),
                     ),
                 )
+                self._trim_history_conn(conn)
                 meta_data = snapshot_data.get("_parser_metadata")
                 if isinstance(meta_data, dict) and "parser_version" in meta_data:
                     try:
@@ -1673,6 +1697,7 @@ class Database:
                         json.dumps(self._portable_snapshot_data(old_values), ensure_ascii=False),
                     ),
                 )
+                self._trim_history_conn(conn)
                 updated += 1
         return updated
 
@@ -1721,6 +1746,7 @@ class Database:
                     """,
                     (request_id, action, description),
                 )
+                self._trim_history_conn(conn)
             return new_value
 
     def is_request_pinned(self, request_id: int) -> bool:

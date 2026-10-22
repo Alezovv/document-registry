@@ -117,7 +117,8 @@ class FieldExtractionMixin:
             r"(?:и\.?\s*о\.?|врио|врид)?\s*УУП(?:\s+ОУУП\s+и\s+ПДН)?",
             r"(?:и\.?\s*о\.?|врио|врид)?\s*участков\w+\s+уполномоченн\w+",
             r"(?:и\.?\s*о\.?|врио|врид)?\s*(?:врио\s+начальника|заместитель\w*|начальник\w*|директор\w*|заведующ\w+)",
-            r"лейтенант\s+полиции|капитан\s+полиции|майор\s+полиции|подполковник\s+полиции",
+            r"(?:младший|старший)\s+лейтенант\s+полиции|лейтенант\s+полиции|"
+            r"капитан\s+полиции|майор\s+полиции|подполковник\s+полиции|полковник\s+полиции",
             r"(?:в\s+лице\s+)?(?:представител[ьяе](?:\s+по\s+доверенности)?)",
         )
         pattern = re.compile(r"\b(" + "|".join(position_patterns) + r")\b", re.IGNORECASE)
@@ -131,8 +132,13 @@ class FieldExtractionMixin:
                     continue
                 if re.search(r"(?i)\bтел\.?\b", line) and not re.search(r"(?i)\bв\s+лице\s+представител\w*", line):
                     continue
-                # In body/header (not footer), ignore dative forms addressed to recipient
-                if source is not footer and re.search(r"(?i)\b(?:директору|начальнику|врачу|судье|следователю|дознавателю|кому)\b", line):
+                # The signature zone can accidentally include the recipient block on short
+                # documents or when OCR geometry is weak. Dative addressee forms are never
+                # the sender's job title, regardless of which text zone supplied the line.
+                if re.search(
+                    r"(?i)\b(?:директору|начальнику|врачу|судье|следователю|дознавателю|кому)\b",
+                    line,
+                ):
                     continue
                 candidate_lines.append(line)
                 match = pattern.search(line)
@@ -146,7 +152,11 @@ class FieldExtractionMixin:
                     # Preserve the rank when it is printed on the same police
                     # signature line, but never include the signer's name itself.
                     if re.match(r"(?i)^УУП", value):
-                        rank = re.search(r"(?i)\b(?:лейтенант|капитан|майор|подполковник)\s+полиции\b", line)
+                        rank = re.search(
+                            r"(?i)\b(?:(?:младший|старший)\s+лейтенант|лейтенант|капитан|майор|"
+                            r"подполковник|полковник)\s+полиции\b",
+                            line,
+                        )
                         if rank and rank.group(0).lower() not in value.lower():
                             value = f"{value}, {rank.group(0)}"
                     return value[:140]
@@ -510,7 +520,9 @@ class FieldExtractionMixin:
                 and not cls._is_attorney_date_context(full_text or header, cand)
             ):
                 return cand
-        return candidates[0] if candidates else ""
+        # If every candidate was identified as a birth/attorney date, leave the
+        # field empty rather than silently recording unrelated personal data.
+        return ""
 
     @classmethod
     def _normalize_target_name(cls, raw: str) -> str:

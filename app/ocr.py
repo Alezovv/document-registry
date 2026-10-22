@@ -591,15 +591,22 @@ class OCR:
                 if len(hybrid_text) >= 200:
                     critical_missing = False
                     if sufficiency_check is not None:
+                        # h_res was already calculated for these exact blocks above.
+                        # Re-running the parser here is redundant and can be costly.
                         try:
-                            h_res = sufficiency_check(hybrid_text, hybrid_blocks)
-                            if hasattr(h_res, "missing_reasons"):
+                            if h_res is None:
+                                critical_missing = True
+                            elif hasattr(h_res, "missing_reasons"):
                                 critical_missing = any(
                                     r in h_res.missing_reasons
-                                    for r in ("missing_or_unreliable_date", "missing_department", "missing_document_number")
+                                    for r in (
+                                        "missing_or_unreliable_date",
+                                        "missing_department",
+                                        "missing_document_number",
+                                    )
                                 )
                         except Exception:
-                            pass
+                            critical_missing = True
                     if not critical_missing:
                         logger.info(
                             "Hybrid text on page %d has all critical fields, accepting without full OCR",
@@ -1315,6 +1322,11 @@ class OCR:
                 if min_angle <= abs(angle) <= max_angle:
                     angles.append(angle)
 
+            # Release the full-page morphology buffers before allocating the
+            # rotated image. On scan-heavy, low-RAM machines this avoids
+            # carrying both masks and the destination image at the same time.
+            del thresh, dilated, contours
+
             if not angles or len(angles) < 3:
                 return image, 0.0
 
@@ -1376,6 +1388,10 @@ class OCR:
         if resize_factor < 1.0:
             resized_scale = scale * resize_factor
             matrix = pymupdf.Matrix(resized_scale, resized_scale)
+            # Drop the first rendered page before requesting the resized one;
+            # assigning directly would keep both Pixmaps alive during the
+            # second render call because its right-hand side is evaluated first.
+            del pixmap
             pixmap = page.get_pixmap(matrix=matrix, colorspace=colorspace, alpha=False, clip=clip)
 
         return pixmap

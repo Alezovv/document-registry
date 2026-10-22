@@ -5,6 +5,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from app.document_parser_parts.constants import FIELD_NAMES, ORGANISATION_TERMS, POSITION_TERMS
+from app.document_parser_parts.similarity import ratio_if_above, ratio_upper_bound
 
 
 class LayoutAnalysisMixin:
@@ -97,7 +98,7 @@ class LayoutAnalysisMixin:
             ):
                 return f"{w1}-{w2}\n"
             return f"{w1}{w2}\n"
-        return re.sub(r"([А-ЯЁа-яё]{2,})-\n([а-яё]{2,})", _replace, text)
+        return re.sub(r"([А-ЯЁа-яё]{2,})-\r?\n([а-яё]{2,})", _replace, text)
 
     @classmethod
     def _layout_zones(cls, text: str, blocks: list[dict[str, Any]]) -> dict[str, str]:
@@ -121,6 +122,21 @@ class LayoutAnalysisMixin:
         if not blocks:
             return zones
 
+        # Compute fallback geometry once. Without page_width/page_height metadata,
+        # doing these max() scans inside the block loop makes this path O(N^2).
+        fallback_page_w = 0.0
+        fallback_page_h = 0.0
+        for candidate in blocks:
+            try:
+                fallback_page_w = max(
+                    fallback_page_w, float(candidate.get("x2", 0) or 0)
+                )
+                fallback_page_h = max(
+                    fallback_page_h, float(candidate.get("y2", 0) or 0)
+                )
+            except (TypeError, ValueError):
+                continue
+
         usable: list[tuple[dict[str, Any], float, float, float, float, float, float]] = []
         for block in blocks:
             try:
@@ -133,9 +149,9 @@ class LayoutAnalysisMixin:
             except (TypeError, ValueError):
                 continue
             if page_w <= 0:
-                page_w = max((float(b.get("x2", 0) or 0) for b in blocks), default=0.0)
+                page_w = fallback_page_w
             if page_h <= 0:
-                page_h = max((float(b.get("y2", 0) or 0) for b in blocks), default=0.0)
+                page_h = fallback_page_h
             if page_w <= 0 or page_h <= 0:
                 continue
             usable.append((block, x1, y1, x2, y2, page_w, page_h))
@@ -257,7 +273,11 @@ class LayoutAnalysisMixin:
             surname_matched = any(
                 bw == surname
                 or (len(sur_stem) >= 3 and bw.startswith(sur_stem) and abs(len(bw) - len(surname)) <= 4)
-                or (len(surname) >= 4 and SequenceMatcher(None, surname, bw).ratio() >= 0.78)
+                or (
+                    len(surname) >= 4
+                    and ratio_upper_bound(surname, bw) >= 0.78
+                    and SequenceMatcher(None, surname, bw).ratio() >= 0.78
+                )
                 for bw in b_words
             )
             if not surname_matched:
@@ -325,9 +345,10 @@ class LayoutAnalysisMixin:
                     if not block_tokens:
                         continue
                     overlap = len(value_tokens & block_tokens) / max(1, min(len(value_tokens), len(block_tokens))) if value_tokens else 0.0
-                    similarity = SequenceMatcher(None, value_key, block_key).ratio()
                     contained = 1.0 if value_key in block_key or block_key in value_key else 0.0
-                    score = max(contained, overlap * 0.9, similarity * 0.82)
+                    base_score = max(contained, overlap * 0.9)
+                    similarity = ratio_if_above(value_key, block_key, base_score / 0.82)
+                    score = max(base_score, similarity * 0.82)
                     if field_name in {"from_person", "to_person"}:
                         score = max(
                             score,
@@ -551,6 +572,8 @@ class LayoutAnalysisMixin:
             width = max(1, len(term_words))
             for index in range(0, max(1, len(normalized_words) - width + 1)):
                 phrase = " ".join(normalized_words[index:index + width])
+                if ratio_upper_bound(phrase, term_key) <= best[0]:
+                    continue
                 score = SequenceMatcher(None, phrase, term_key).ratio()
                 if score > best[0]:
                     best = (score, term)

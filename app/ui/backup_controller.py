@@ -38,9 +38,13 @@ class BackupWorker(QThread):
                 if not task_started:
                     raise BackupError("Экономный режим: дождитесь завершения OCR или другой тяжёлой операции и повторите backup.")
             if self.operation in {"create", "auto"}:
-                result = self.service.create_backup(self.path)
+                result = self.service.create_backup(
+                    self.path, should_cancel=self.isInterruptionRequested
+                )
             elif self.operation == "restore":
-                self.service.restore_backup(self.path)
+                self.service.restore_backup(
+                    self.path, should_cancel=self.isInterruptionRequested
+                )
                 result = Path(self.path)
             else:
                 raise BackupError("Неизвестная операция резервного копирования.")

@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+from typing import Callable
 
 from app.backup_service import BackupService
 from app.database import Database
@@ -238,12 +239,20 @@ class LegacyImportService:
             return int(value.strip().casefold() in {"1", "true", "yes", "да", "on"})
         return int(bool(value))
 
+    @staticmethod
+    def _check_cancelled(should_cancel: Callable[[], bool] | None) -> None:
+        if should_cancel is not None and should_cancel():
+            raise LegacyImportError("Перенос старой базы отменён до замены текущих данных.")
+
     def _build_current_database(
         self,
         source_db: Path,
         legacy_documents_dir: Path | None,
         staged_data: Path,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> tuple[Path, Path, int, int, int]:
+        self._check_cancelled(should_cancel)
         staged_docs = staged_data / "documents"
         staged_db = staged_data / "requests.db"
         staged_data.mkdir(parents=True, exist_ok=True)
@@ -276,6 +285,7 @@ class LegacyImportService:
                           COALESCE(?, CURRENT_TIMESTAMP), ?)
             """
             for row in rows:
+                self._check_cancelled(should_cancel)
                 source_document = str(self._value(row, old_columns, "source_document", "") or "").strip()
                 migrated_document = source_document
                 if source_document:
@@ -435,7 +445,10 @@ class LegacyImportService:
         source_db: str | Path,
         documents_dir: str | Path | None = None,
         backup_dir: str | Path | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> LegacyImportResult:
+        self._check_cancelled(should_cancel)
         source = Path(source_db).expanduser().resolve(strict=False)
         explicit_docs = (
             Path(documents_dir).expanduser().resolve(strict=False)
@@ -453,7 +466,8 @@ class LegacyImportService:
         backup_root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_path = backup_root / f"before_legacy_import_{stamp}.zip"
-        self.backup.create_backup(backup_path)
+        self.backup.create_backup(backup_path, should_cancel=should_cancel)
+        self._check_cancelled(should_cancel)
 
         with tempfile.TemporaryDirectory(prefix="registry_legacy_import_") as temp_name:
             staged_data = Path(temp_name) / "data"
@@ -461,7 +475,9 @@ class LegacyImportService:
                 source,
                 legacy_docs,
                 staged_data,
+                should_cancel=should_cancel,
             )
+            self._check_cancelled(should_cancel)
             try:
                 self._replace_current(staged_db, staged_docs)
             except Exception as error:

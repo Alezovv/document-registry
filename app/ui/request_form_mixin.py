@@ -137,7 +137,11 @@ class RequestFormMixin:
         if missing:
             self.highlight_empty_fields()
             dialog = IncompleteDataDialog(missing, self)
-            if dialog.exec() != QDialog.DialogCode.Accepted:
+            try:
+                result = dialog.exec()
+            finally:
+                dialog.deleteLater()
+            if result != QDialog.DialogCode.Accepted:
                 return False
         return True
 
@@ -226,7 +230,12 @@ class RequestFormMixin:
         keep = box.addButton("Остаться", QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(keep)
         box.exec()
-        return box.clickedButton() == discard
+        confirmed = box.clickedButton() == discard
+        if confirmed:
+            # reject() triggers closeEvent as well. Mark the decision as final
+            # so the same modal prompt is not shown a second time.
+            self._is_dirty = False
+        return confirmed
 
     def reject(self):
         if getattr(self, "_force_closing", False) or self._confirm_discard():

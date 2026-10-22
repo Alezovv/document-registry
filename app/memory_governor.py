@@ -96,8 +96,8 @@ class MemoryGovernor:
             trim_process_working_set()
         return self.sample()
 
-    def prepare_heavy_task(self, release_callback=None, *, wait_seconds: float = 12.0) -> MemoryDecision:
-        """Create headroom before OCR; never waits in non-economy profiles."""
+    def prepare_heavy_task(self, release_callback=None, *, wait_seconds: float = 4.0) -> MemoryDecision:
+        """Create headroom before OCR with a bounded wait in economy mode."""
         decision = self.sample()
         if not self.enabled:
             return decision
@@ -114,9 +114,34 @@ class MemoryGovernor:
             decision = self.cleanup(trim=decision.action in {"block", "critical", "emergency", "absolute"})
 
         deadline = time.monotonic() + max(0.0, float(wait_seconds))
+        stagnant_samples = 0
         while not decision.allow_heavy_task and time.monotonic() < deadline:
+            previous = decision
             time.sleep(0.35)
             decision = self.cleanup(trim=True)
+
+            # If both process usage and available system memory fail to improve
+            # over several samples after unloading the model/GC/trim, further
+            # synchronous waiting is unlikely to help. Return the blocked
+            # decision promptly so OCR can report a clear actionable error.
+            process_released = decision.current_bytes <= previous.current_bytes - 16 * MIB
+            system_recovered = (
+                decision.available_system_bytes > 0
+                and previous.available_system_bytes > 0
+                and decision.available_system_bytes >= previous.available_system_bytes + 16 * MIB
+            )
+            if process_released or system_recovered:
+                stagnant_samples = 0
+            else:
+                stagnant_samples += 1
+            if stagnant_samples >= 4 and not decision.allow_heavy_task:
+                logger.warning(
+                    "Memory headroom did not improve after cleanup; skipping remaining wait "
+                    "(current=%.0f MB, available=%.0f MB)",
+                    decision.current_bytes / MIB,
+                    decision.available_system_bytes / MIB,
+                )
+                break
         return decision
 
     def after_document(self, release_callback=None) -> MemoryDecision:

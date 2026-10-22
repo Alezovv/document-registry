@@ -1102,8 +1102,33 @@ class UpdateService:
         progress: Callable[[int, int], None] | None,
         should_cancel: Callable[[], bool] | None,
     ) -> Path:
-        if temporary.exists() and temporary.stat().st_size > info.size_bytes:
-            temporary.unlink(missing_ok=True)
+        if temporary.exists():
+            try:
+                partial_size = temporary.stat().st_size
+            except OSError:
+                temporary.unlink(missing_ok=True)
+                partial_size = 0
+
+            if partial_size > info.size_bytes:
+                temporary.unlink(missing_ok=True)
+                partial_size = 0
+            elif partial_size == info.size_bytes:
+                # A previous download can be interrupted after receiving the final
+                # byte but before os.replace(). Never request Range: bytes=<size>-:
+                # Google Drive answers HTTP 416 for that range. Verify locally first.
+                try:
+                    partial_hash = sha256_file(temporary)
+                except OSError:
+                    partial_hash = ""
+                if partial_hash.lower() == info.sha256.lower():
+                    os.replace(temporary, destination)
+                    if progress is not None:
+                        progress(info.size_bytes, info.size_bytes)
+                    self._cleanup_old_downloads(keep=destination, keep_partial=temporary)
+                    return destination
+                temporary.unlink(missing_ok=True)
+                partial_size = 0
+
         start_size = temporary.stat().st_size if temporary.exists() else 0
         if progress is not None:
             progress(start_size, info.size_bytes)

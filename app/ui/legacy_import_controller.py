@@ -30,7 +30,11 @@ class LegacyImportWorker(QThread):
                 task_started = COORDINATOR.wait_start("legacy_import", timeout=30.0)
                 if not task_started:
                     raise LegacyImportError("Экономный режим: дождитесь завершения OCR/backup и повторите импорт старой базы.")
-            result = self.service.migrate(self.source_db, self.documents_dir)
+            result = self.service.migrate(
+                self.source_db,
+                self.documents_dir,
+                should_cancel=self.isInterruptionRequested,
+            )
             self.succeeded.emit(result)
         except Exception as error:
             logger.exception("Ошибка переноса старой базы")

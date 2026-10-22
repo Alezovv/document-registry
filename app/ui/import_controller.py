@@ -180,10 +180,22 @@ class ImportController(QObject):
                     self.parent_widget.register_dialog(dialog)
                 try:
                     result = dialog.exec()
+                    switch_target_id = dialog.switch_target_request_id
+                    switch_save_current = bool(dialog.switch_save_current)
+                    dialog_request = None
+                    dialog_request_error = None
+                    if result == QDialog.DialogCode.Accepted or (
+                        result == RequestDialog.SWITCH_REQUEST_RESULT and switch_save_current
+                    ):
+                        try:
+                            dialog_request = dialog.get_request()
+                        except Exception as error:
+                            dialog_request_error = error
                 finally:
                     self.active_dialog = None
                     if self.parent_widget is not None and hasattr(self.parent_widget, "unregister_dialog"):
                         self.parent_widget.unregister_dialog(dialog)
+                    dialog.deleteLater()
                 if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
                     return
                 if result == RequestDialog.DELETE_RESULT:
@@ -193,11 +205,18 @@ class ImportController(QObject):
                     self.toast_requested.emit("Запрос удалён", "Запрос успешно удалён из реестра.", "warning")
                     return
                 if result == RequestDialog.SWITCH_REQUEST_RESULT:
-                    target_id = dialog.switch_target_request_id
+                    target_id = switch_target_id
                     if target_id is None:
                         return
-                    if dialog.switch_save_current:
-                        updated = dialog.get_request()
+                    if switch_save_current:
+                        if dialog_request_error is not None:
+                            QMessageBox.critical(
+                                self.parent_widget,
+                                "Ошибка формы",
+                                f"Не удалось прочитать данные запроса:\n\n{dialog_request_error}",
+                            )
+                            return
+                        updated = dialog_request
                         try:
                             self.request_service.update_request(updated)
                             self.request_service.learn_parser_corrections(
@@ -227,8 +246,15 @@ class ImportController(QObject):
                     request_to_open = target
                     continue
                 if result == QDialog.DialogCode.Accepted:
+                    if dialog_request_error is not None:
+                        QMessageBox.critical(
+                            self.parent_widget,
+                            "Ошибка формы",
+                            f"Не удалось прочитать данные запроса:\n\n{dialog_request_error}",
+                        )
+                        return
                     try:
-                        updated = dialog.get_request()
+                        updated = dialog_request
                         self.request_service.update_request(updated)
                         self.request_service.learn_parser_corrections(
                             presented_request, updated, context=diagnostics

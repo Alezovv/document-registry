@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import tempfile
+import threading
+from functools import wraps
 from collections import Counter
 from dataclasses import replace
 from difflib import SequenceMatcher
@@ -22,6 +24,15 @@ LEARNABLE_FIELDS = (
     "from_person",
     "to_person",
 )
+
+
+def _synchronized(method):
+    """Serialize public access to the mutable parser-correction rule set."""
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 def _key(value: str) -> str:
@@ -88,6 +99,7 @@ class ParserCorrectionMemory:
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
+        self._lock = threading.RLock()
         self._data = self._load()
 
     @classmethod
@@ -200,6 +212,7 @@ class ParserCorrectionMemory:
         contexts.sort(key=lambda item: int(item.get("count", 0)), reverse=True)
         del contexts[self.MAX_CONTEXTS_PER_RULE :]
 
+    @_synchronized
     def learn(
         self,
         before: Request,
@@ -254,6 +267,7 @@ class ParserCorrectionMemory:
                 logger.exception("Не удалось сохранить память исправлений parser")
         return changed
 
+    @_synchronized
     def canonical_values(self, field: str) -> list[str]:
         if field not in LEARNABLE_FIELDS:
             return []
@@ -268,6 +282,7 @@ class ParserCorrectionMemory:
             display[target_key] = target
         return [display[key] for key, _ in counts.most_common()]
 
+    @_synchronized
     def _canonical_counts(self, field: str) -> Counter[str]:
         counts: Counter[str] = Counter()
         for rule in self._rules(field):
@@ -277,6 +292,7 @@ class ParserCorrectionMemory:
                 counts[target_key] += max(1, int(rule.get("count", 1)))
         return counts
 
+    @_synchronized
     def _context_support(self, field: str, target_key: str, context: dict[str, Any] | None) -> int:
         wanted = _field_context(field, context)
         if not wanted:
@@ -300,11 +316,13 @@ class ParserCorrectionMemory:
         return score
 
 
+    @_synchronized
     def cache_key(self) -> str:
         """Stable short fingerprint used to invalidate parser cache after learning."""
         payload = json.dumps(self._data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
+    @_synchronized
     def suggest_correction(
         self,
         field: str,
@@ -384,6 +402,7 @@ class ParserCorrectionMemory:
             "context_support": int(best["context_support"]),
         }
 
+    @_synchronized
     def correct_value(
         self,
         field: str,
@@ -430,6 +449,7 @@ class ParserCorrectionMemory:
                 best = display[target_key]
         return best
 
+    @_synchronized
     def apply(self, request: Request, context: dict[str, Any] | None = None) -> Request:
         corrected = replace(request)
         for field in LEARNABLE_FIELDS:
@@ -438,6 +458,7 @@ class ParserCorrectionMemory:
                 setattr(corrected, field, self.correct_value(field, value, context=context))
         return corrected
 
+    @_synchronized
     def merge_suggestions(
         self,
         suggestions: dict[str, list[str]] | None,

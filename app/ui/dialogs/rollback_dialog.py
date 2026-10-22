@@ -220,6 +220,49 @@ class RollbackVersionDialog(QDialog):
         self.tabs.addTab(self.database_tab, "Сохранённые снимки БД")
         root.addWidget(self.tabs, 1)
 
+
+    def _database_operation_running(self) -> bool:
+        tab = getattr(self, "database_tab", None)
+        worker = getattr(tab, "_operation_worker", None)
+        if worker is None:
+            return False
+        try:
+            # Keep the dialog open until the GUI has processed the worker's
+            # finished signal and delivered its result/error, even if the OS
+            # thread has just stopped in the meantime.
+            worker.isRunning()
+            return True
+        except RuntimeError:
+            return False
+
+    def _reject_close_for_database_operation(self) -> bool:
+        if not self._database_operation_running():
+            return False
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(
+            self,
+            "Операция с базой данных",
+            "Восстановление или слияние базы ещё выполняется. "
+            "Закройте это окно после завершения операции.",
+        )
+        return True
+
+    def reject(self) -> None:
+        if self._reject_close_for_database_operation():
+            return
+        super().reject()
+
+    def accept(self) -> None:
+        if self._reject_close_for_database_operation():
+            return
+        super().accept()
+
+    def closeEvent(self, event) -> None:
+        if self._reject_close_for_database_operation():
+            event.ignore()
+            return
+        super().closeEvent(event)
+
     def _populate_versions(self) -> None:
         self.version_combo.blockSignals(True)
         self.version_combo.clear()

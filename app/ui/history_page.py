@@ -302,7 +302,10 @@ class HistoryPage(QWidget):
         buttons.addWidget(cancel)
         buttons.addWidget(clear)
         layout.addLayout(buttons)
-        return dialog.exec() == QDialog.DialogCode.Accepted
+        try:
+            return dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            dialog.deleteLater()
 
     def _clear_history(self):
         try:
@@ -412,7 +415,10 @@ class HistoryPage(QWidget):
             can_restore=can_restore,
             parent=self,
         )
-        dialog.exec()
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     def _restore_history(self, history_id):
         self.request_service.restore_request_from_history(history_id)

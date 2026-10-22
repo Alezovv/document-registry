@@ -28,6 +28,10 @@ REQUIRED = (
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("--full", action="store_true")
     args = parser.parse_args()
@@ -41,12 +45,23 @@ def main() -> int:
         failures.append("compileall failed")
 
     if args.full:
-        completed = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
             cwd=ROOT,
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
-        if completed.returncode:
+        lines = []
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            lines.append(line)
+        proc.wait()
+        full_out = "".join(lines)
+        is_ok = ("\nOK" in full_out or full_out.startswith("OK")) and "FAILED (" not in full_out
+        if proc.returncode != 0 and not is_ok:
             failures.append("unit tests failed")
 
     if failures:

@@ -55,15 +55,34 @@ class RequestController(QObject):
                 self.parent_widget.register_dialog(dialog)
             try:
                 res = dialog.exec()
+                switch_target_id = dialog.switch_target_request_id
+                switch_save_current = bool(dialog.switch_save_current)
+                dialog_request = None
+                dialog_request_error = None
+                if res == QDialog.DialogCode.Accepted or (
+                    res == RequestDialog.SWITCH_REQUEST_RESULT and switch_save_current
+                ):
+                    try:
+                        dialog_request = dialog.get_request()
+                    except Exception as error:
+                        dialog_request_error = error
             finally:
                 self.active_dialog = None
                 if self.parent_widget is not None and hasattr(self.parent_widget, "unregister_dialog"):
                     self.parent_widget.unregister_dialog(dialog)
+                dialog.deleteLater()
             if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
                 return
             if res == RequestDialog.SWITCH_REQUEST_RESULT:
-                if getattr(dialog, "switch_save_current", False):
-                    draft = dialog.get_request()
+                if switch_save_current:
+                    if dialog_request_error is not None:
+                        QMessageBox.critical(
+                            self.parent_widget,
+                            "Ошибка формы",
+                            f"Не удалось прочитать данные запроса:\n\n{dialog_request_error}",
+                        )
+                        return
+                    draft = dialog_request
                     try:
                         self.request_service.create_request(draft)
                         self.changed.emit()
@@ -74,7 +93,7 @@ class RequestController(QObject):
                         draft_request = draft
                         force_dirty_on_reopen = True
                         continue
-                target_id = dialog.switch_target_request_id
+                target_id = switch_target_id
                 if target_id is not None:
                     target = self.request_service.get_request(int(target_id))
                     if target is not None:
@@ -82,12 +101,19 @@ class RequestController(QObject):
                 return
             if res != QDialog.DialogCode.Accepted:
                 return
+            if dialog_request_error is not None:
+                QMessageBox.critical(
+                    self.parent_widget,
+                    "Ошибка формы",
+                    f"Не удалось прочитать данные запроса:\n\n{dialog_request_error}",
+                )
+                return
             try:
-                self.request_service.create_request(dialog.get_request())
+                self.request_service.create_request(dialog_request)
             except Exception as error:
                 logger.exception("Ошибка при создании запроса")
                 QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось создать запрос:\n\n{error}")
-                draft_request = dialog.get_request()
+                draft_request = dialog_request
                 force_dirty_on_reopen = True
                 continue
             self.changed.emit()
@@ -126,10 +152,22 @@ class RequestController(QObject):
                 self.parent_widget.register_dialog(dialog)
             try:
                 result = dialog.exec()
+                switch_target_id = dialog.switch_target_request_id
+                switch_save_current = bool(dialog.switch_save_current)
+                dialog_request = None
+                dialog_request_error = None
+                if result == QDialog.DialogCode.Accepted or (
+                    result == RequestDialog.SWITCH_REQUEST_RESULT and switch_save_current
+                ):
+                    try:
+                        dialog_request = dialog.get_request()
+                    except Exception as error:
+                        dialog_request_error = error
             finally:
                 self.active_dialog = None
                 if self.parent_widget is not None and hasattr(self.parent_widget, "unregister_dialog"):
                     self.parent_widget.unregister_dialog(dialog)
+                dialog.deleteLater()
 
             if self._is_closing or (self.parent_widget is not None and getattr(self.parent_widget, "_is_closing", False)):
                 return
@@ -145,11 +183,18 @@ class RequestController(QObject):
                 return
 
             if result == RequestDialog.SWITCH_REQUEST_RESULT:
-                target_id = dialog.switch_target_request_id
+                target_id = switch_target_id
                 if target_id is None:
                     return
-                if dialog.switch_save_current:
-                    updated = dialog.get_request()
+                if switch_save_current:
+                    if dialog_request_error is not None:
+                        QMessageBox.critical(
+                            self.parent_widget,
+                            "Ошибка формы",
+                            f"Не удалось прочитать данные запроса:\n\n{dialog_request_error}",
+                        )
+                        return
+                    updated = dialog_request
                     try:
                         self.request_service.update_request(updated)
                         self.request_service.learn_parser_corrections(
@@ -177,8 +222,15 @@ class RequestController(QObject):
 
             if result != QDialog.DialogCode.Accepted:
                 return
+            if dialog_request_error is not None:
+                QMessageBox.critical(
+                    self.parent_widget,
+                    "Ошибка формы",
+                    f"Не удалось прочитать данные запроса:\n\n{dialog_request_error}",
+                )
+                return
             try:
-                updated = dialog.get_request()
+                updated = dialog_request
                 self.request_service.update_request(updated)
                 self.request_service.learn_parser_corrections(
                     presented_request, updated, context=diagnostics
@@ -186,7 +238,7 @@ class RequestController(QObject):
             except Exception as error:
                 logger.exception("Ошибка обновления запроса")
                 QMessageBox.critical(self.parent_widget, "Ошибка сохранения", f"Не удалось обновить запрос:\n\n{error}")
-                request_to_open = updated
+                request_to_open = dialog_request if dialog_request is not None else request_to_open
                 force_dirty_on_reopen = True
                 continue
             self.changed.emit()
@@ -202,8 +254,14 @@ class RequestController(QObject):
                 "info",
             )
             return
-        if confirm and DeleteRequestDialog(requests, self.parent_widget).exec() != QDialog.DialogCode.Accepted:
-            return
+        if confirm:
+            dialog = DeleteRequestDialog(requests, self.parent_widget)
+            try:
+                result = dialog.exec()
+            finally:
+                dialog.deleteLater()
+            if result != QDialog.DialogCode.Accepted:
+                return
         deleted_count = 0
         try:
             for request in requests:

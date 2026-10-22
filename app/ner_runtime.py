@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Any, Iterable
 
 from app.app_paths import get_app_paths
@@ -35,15 +36,17 @@ class DisabledNerEngine(NerEngine):
 
 
 class FallbackNerEngine(NerEngine):
-    """Use ONNX when available and permanently fall back after runtime failure."""
+    """Use ONNX when available and retry it after transient runtime failures."""
 
     name = "onnx-with-heuristic-fallback"
+    RETRY_AFTER_SECONDS = 30.0
 
     def __init__(self, primary: NerEngine, fallback: NerEngine | None = None) -> None:
         self.primary = primary
         self.fallback = fallback or HeuristicRussianNerEngine()
         self._lock = threading.RLock()
         self._disabled_reason = ""
+        self._disabled_at = 0.0
         self.last_metrics: dict[str, Any] = {
             "engine": self.name,
             "active_engine": getattr(primary, "name", "onnx"),
@@ -53,25 +56,35 @@ class FallbackNerEngine(NerEngine):
     def extract(self, text: str, blocks: Iterable[dict[str, Any]] = ()) -> list[NerEntity]:
         materialized_blocks = list(blocks)
         with self._lock:
+            now = time.monotonic()
+            retry_primary = bool(
+                self._disabled_reason
+                and now - self._disabled_at >= self.RETRY_AFTER_SECONDS
+            )
+            should_try_primary = not self._disabled_reason or retry_primary
             disabled_reason = self._disabled_reason
-        if not disabled_reason:
-            try:
-                output = self.primary.extract(text, materialized_blocks)
-                with self._lock:
+            if retry_primary:
+                # Clear the circuit-breaker state before the probe. If ONNX still
+                # fails, the exception handler below starts a fresh cooldown.
+                self._disabled_reason = ""
+                self._disabled_at = 0.0
+
+            if should_try_primary:
+                try:
+                    output = self.primary.extract(text, materialized_blocks)
                     metrics = dict(getattr(self.primary, "last_metrics", {}) or {})
                     metrics.setdefault("engine", self.name)
                     metrics["engine"] = self.name
                     metrics["active_engine"] = getattr(self.primary, "name", "onnx")
                     metrics["fallback_used"] = False
                     self.last_metrics = metrics
-                return output
-            except Exception as error:
-                with self._lock:
+                    return output
+                except Exception as error:
                     self._disabled_reason = str(error) or type(error).__name__
+                    self._disabled_at = time.monotonic()
                     disabled_reason = self._disabled_reason
 
-        output = self.fallback.extract(text, materialized_blocks)
-        with self._lock:
+            output = self.fallback.extract(text, materialized_blocks)
             self.last_metrics = {
                 "engine": self.name,
                 "active_engine": getattr(self.fallback, "name", "heuristic"),
@@ -80,7 +93,8 @@ class FallbackNerEngine(NerEngine):
                 "fallback_reason": disabled_reason,
                 "entities": len(output),
             }
-        return output
+            return output
+
 
 
 def engine_cache_key(*, mode: str | None = None, model_root: str | Path | None = None) -> str:

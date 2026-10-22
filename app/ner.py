@@ -74,6 +74,13 @@ class HeuristicRussianNerEngine(NerEngine):
         r"[А-ЯЁ]\.\s*[А-ЯЁ]\."
         r"(?![А-ЯЁа-яё-])"
     )
+    # Some official letters print initials before the surname: «И. О. Иванов».
+    _PERSON_INITIALS_FIRST_RE = re.compile(
+        r"(?<![А-ЯЁа-яё-])"
+        r"[А-ЯЁ]\.\s*[А-ЯЁ]\.\s*"
+        r"[А-ЯЁ][а-яё-]{1,}(?:-[А-ЯЁ][а-яё-]{1,})?"
+        r"(?![А-ЯЁа-яё-])"
+    )
     _PERSON_FULL_RE = re.compile(
         r"(?<![А-ЯЁа-яё-])"
         r"[А-ЯЁ][а-яё-]{1,}(?:-[А-ЯЁ][а-яё-]{1,})?\s+"
@@ -126,7 +133,11 @@ class HeuristicRussianNerEngine(NerEngine):
     def _person_entities(cls, line: str, block: dict[str, Any], zone: str) -> list[NerEntity]:
         output: list[NerEntity] = []
         seen: set[tuple[int, int]] = set()
-        for pattern, base in ((cls._PERSON_INITIALS_RE, 0.86), (cls._PERSON_FULL_RE, 0.82)):
+        for pattern, base in (
+            (cls._PERSON_INITIALS_RE, 0.86),
+            (cls._PERSON_INITIALS_FIRST_RE, 0.86),
+            (cls._PERSON_FULL_RE, 0.82),
+        ):
             for match in pattern.finditer(line):
                 if any(start <= match.start() and match.end() <= end for start, end in seen):
                     continue
@@ -157,6 +168,7 @@ class HeuristicRussianNerEngine(NerEngine):
         # Avoid swallowing a trailing labelled person/signature into the org span.
         value = re.split(r"(?i)\s+(?:кому|адресат|исполнитель|тел\.?|телефон)\s*[:—–-]", value, maxsplit=1)[0]
         value = cls._PERSON_INITIALS_RE.sub("", value).strip(" ,:;—–-")
+        value = cls._PERSON_INITIALS_FIRST_RE.sub("", value).strip(" ,:;—–-")
         value = cls._PERSON_FULL_RE.sub("", value).strip(" ,:;—–-")
         if len(value) < 4 or len(value) > 180:
             return []

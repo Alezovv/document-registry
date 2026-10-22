@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import tempfile
 import zipfile
+from typing import Callable
 
 from app.archive_safety import validate_archive_member_paths
 from app.database import Database
@@ -28,6 +29,10 @@ _BACKUP_FREE_SPACE_RESERVE = 64 * 1024 * 1024
 
 class BackupError(RuntimeError):
     pass
+
+
+class BackupCancelled(BackupError):
+    """Raised when a cooperative cancellation is requested before commit."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,8 +90,13 @@ class BackupService:
         return (data_dir / "backups").resolve()
 
     def create_backup(
-        self, destination: str | Path, *, update_health: bool = True
+        self,
+        destination: str | Path,
+        *,
+        update_health: bool = True,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> BackupResult:
+        self._check_cancelled(should_cancel)
         dest_path = Path(destination).expanduser()
         if not dest_path.is_absolute():
             destination = (self.default_backups_dir / dest_path).resolve(strict=False)
@@ -127,21 +137,34 @@ class BackupService:
             temp_zip = Path(temp_name)
             try:
                 with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-                    archive.write(db_snapshot, "database/requests.db")
+                    self._write_file_to_archive(
+                        archive, db_snapshot, "database/requests.db", should_cancel
+                    )
                     archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
                     for path in document_paths:
-                        archive.write(path, f"documents/{path.name}")
+                        self._write_file_to_archive(
+                            archive, path, f"documents/{path.name}", should_cancel
+                        )
                     for path in trash_paths:
                         relative = path.relative_to(self.documents.trash_dir)
-                        archive.write(path, (Path("trash") / relative).as_posix())
+                        self._write_file_to_archive(
+                            archive, path, (Path("trash") / relative).as_posix(), should_cancel
+                        )
+                # Validate the temporary archive before replacing a previous
+                # backup. If cancellation or verification fails, the old backup
+                # remains untouched.
+                verification = self.verify_backup(temp_zip, should_cancel=should_cancel)
+                self._check_cancelled(should_cancel)
                 temp_zip.replace(destination)
+            except BackupCancelled:
+                temp_zip.unlink(missing_ok=True)
+                raise
             except Exception as error:
                 temp_zip.unlink(missing_ok=True)
                 raise BackupError(f"Не удалось создать резервную копию: {error}") from error
 
-        # A backup is only reported as successful after the produced archive and
-        # the database inside it have both been validated.
-        verification = self.verify_backup(destination)
+        # The temporary archive and embedded database were validated before
+        # the final atomic replace above.
         try:
             size_bytes = destination.stat().st_size
         except OSError:
@@ -188,8 +211,14 @@ class BackupService:
         except (OSError, zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError) as error:
             raise BackupError(f"Не удалось прочитать резервную копию: {error}") from error
 
-    def verify_backup(self, backup_path: str | Path) -> dict[str, object]:
+    def verify_backup(
+        self,
+        backup_path: str | Path,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
         """Deep-verify archive readability, file counts and the embedded SQLite DB."""
+        self._check_cancelled(should_cancel)
         path = Path(backup_path).expanduser().resolve(strict=False)
         manifest = self.inspect_backup(path)
         try:
@@ -201,6 +230,7 @@ class BackupService:
                     )
                 declared_total = 0
                 for member in members:
+                    self._check_cancelled(should_cancel)
                     if member.file_size > MAX_ARCHIVE_SINGLE_FILE_BYTES:
                         raise BackupError(
                             f"Файл '{member.filename}' в архиве превышает допустимый размер "
@@ -215,12 +245,14 @@ class BackupService:
                 # Bounded stream verification (replaces unbounded testzip() to prevent Zip-bomb DoS)
                 total_verified = 0
                 for member in members:
+                    self._check_cancelled(should_cancel)
                     if member.is_dir():
                         continue
                     member_read = 0
                     try:
                         with archive.open(member, "r") as src:
                             while chunk := src.read(65536):
+                                self._check_cancelled(should_cancel)
                                 member_read += len(chunk)
                                 total_verified += len(chunk)
                                 if member_read > MAX_ARCHIVE_SINGLE_FILE_BYTES:
@@ -279,11 +311,17 @@ class BackupService:
             return {}
         return payload if isinstance(payload, dict) else {}
 
-    def restore_backup(self, backup_path: str | Path) -> None:
+    def restore_backup(
+        self,
+        backup_path: str | Path,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> None:
         path = Path(backup_path).expanduser().resolve(strict=False)
-        # Restoration always uses deep verification; a manifest-only check is not
-        # sufficient before replacing user data.
-        self.verify_backup(path)
+        # Cancellation is allowed only during preflight/extraction. Once the live
+        # database and document directories start swapping, rollback must finish.
+        self._check_cancelled(should_cancel)
+        self.verify_backup(path, should_cancel=should_cancel)
 
         with tempfile.TemporaryDirectory(prefix="registry_restore_") as temp_dir_name:
             temp_dir = Path(temp_dir_name)
@@ -291,12 +329,13 @@ class BackupService:
             extracted.mkdir()
             try:
                 with zipfile.ZipFile(path, "r") as archive:
-                    self._safe_extract(archive, extracted)
+                    self._safe_extract(archive, extracted, should_cancel=should_cancel)
             except Exception as error:
                 if isinstance(error, BackupError):
                     raise
                 raise BackupError(f"Не удалось распаковать резервную копию: {error}") from error
 
+            self._check_cancelled(should_cancel)
             incoming_db = extracted / "database" / "requests.db"
             incoming_schema = self._validate_database(incoming_db)
             if incoming_schema > CURRENT_SCHEMA_VERSION:
@@ -324,6 +363,10 @@ class BackupService:
             if self.documents.trash_dir.exists():
                 shutil.copytree(self.documents.trash_dir, rollback_trash)
 
+            # This is the final cancellation point. From here onward, the live
+            # swap/rollback sequence must run to completion to preserve a
+            # consistent database + document set.
+            self._check_cancelled(should_cancel)
             try:
                 self._replace_database(incoming_db)
                 self._replace_directory(extracted / "documents", self.documents.documents_dir)
@@ -339,6 +382,28 @@ class BackupService:
                         f"Восстановление не удалось, а автоматический откат завершился ошибкой: {rollback_error}"
                     ) from error
                 raise BackupError(f"Не удалось восстановить резервную копию: {error}") from error
+
+    @staticmethod
+    def _check_cancelled(should_cancel: Callable[[], bool] | None) -> None:
+        if should_cancel is not None and should_cancel():
+            raise BackupCancelled("Операция резервного копирования отменена.")
+
+    @classmethod
+    def _write_file_to_archive(
+        cls,
+        archive: zipfile.ZipFile,
+        source_path: Path,
+        archive_name: str,
+        should_cancel: Callable[[], bool] | None,
+    ) -> None:
+        """Write one file in bounded chunks so large PDFs can be cancelled."""
+        cls._check_cancelled(should_cancel)
+        info = zipfile.ZipInfo(archive_name)
+        info.compress_type = zipfile.ZIP_DEFLATED
+        with source_path.open("rb") as source, archive.open(info, "w") as target:
+            while chunk := source.read(1024 * 1024):
+                cls._check_cancelled(should_cancel)
+                target.write(chunk)
 
     def _ensure_free_space(self, destination_dir: Path, documents: list[Path], trash: list[Path]) -> None:
         def safe_size(path: Path) -> int:
@@ -559,7 +624,12 @@ class BackupService:
                 shutil.rmtree(staged, ignore_errors=True)
 
     @staticmethod
-    def _safe_extract(archive: zipfile.ZipFile, destination: Path) -> None:
+    def _safe_extract(
+        archive: zipfile.ZipFile,
+        destination: Path,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> None:
         members = archive.infolist()
         if len(members) > MAX_ARCHIVE_FILES:
             raise BackupError(
@@ -582,6 +652,7 @@ class BackupService:
 
         total_extracted = 0
         for member, member_path in zip(members, member_paths):
+            BackupService._check_cancelled(should_cancel)
             if member.is_dir():
                 member_path.mkdir(parents=True, exist_ok=True)
                 continue
@@ -589,6 +660,7 @@ class BackupService:
             with archive.open(member) as src, open(member_path, "wb") as dst:
                 member_extracted = 0
                 while chunk := src.read(65536):
+                    BackupService._check_cancelled(should_cancel)
                     member_extracted += len(chunk)
                     total_extracted += len(chunk)
                     if member_extracted > MAX_ARCHIVE_SINGLE_FILE_BYTES:

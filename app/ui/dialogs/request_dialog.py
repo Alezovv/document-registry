@@ -524,10 +524,16 @@ class RequestDialog(RequestFormMixin, PdfViewerMixin, QDialog):
         if self.request_service is None:
             return
         picker = CasePickerDialog(self.request_service, self)
-        if picker.exec() != QDialog.DialogCode.Accepted or picker.selected_case_id is None:
+        try:
+            result = picker.exec()
+            selected_case_id = picker.selected_case_id
+            selected_action = getattr(picker, "selected_action", "link")
+        finally:
+            picker.deleteLater()
+        if result != QDialog.DialogCode.Accepted or selected_case_id is None:
             return
-        case_id = int(picker.selected_case_id)
-        if getattr(picker, "selected_action", "link") == "open":
+        case_id = int(selected_case_id)
+        if selected_action == "open":
             self._open_case_dialog(case_id)
             return
         if self.request is None or self.request.id is None:

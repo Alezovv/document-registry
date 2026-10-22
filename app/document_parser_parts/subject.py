@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from difflib import SequenceMatcher
+from app.document_parser_parts.similarity import ratio_upper_bound
 
 from app.document_parser_parts.constants import (
     SUBJECT_ACTION_VERBS,
@@ -66,6 +67,7 @@ class SubjectExtractionMixin:
                 old_key = cls._label_key(old_value)
                 if key == old_key or (
                     min(len(key), len(old_key)) >= 18
+                    and ratio_upper_bound(key, old_key) >= 0.93
                     and SequenceMatcher(None, key, old_key).ratio() >= 0.93
                 ):
                     if score > old_score:

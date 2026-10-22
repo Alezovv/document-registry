@@ -9,6 +9,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.cache/
+**/.cache/
 .coverage
 coverage.xml
 htmlcov/
@@ -101,11 +103,21 @@ manifest.json
 *.uploading
 
 # ==============================================================================
-# Local Reports, Audit Logs & Patch Notes
+# Local Reports, Audit Logs, Patch Notes & Temporary Roadmaps
 # ==============================================================================
 *REPORT*.md
 *report*.md
+*review*.md
+*REVIEW*.md
+*ROADMAP*.md
+*roadmap*.md
+*CHECKLIST*.md
+*checklist*.md
+*RELEASE_CANDIDATE*.md
+*release_candidate*.md
 *patch*.txt
+*.patch
+*.diff
 
 # ==============================================================================
 # AI Assistants & Agent Tooling Metadata

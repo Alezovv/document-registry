@@ -410,16 +410,59 @@ class DocumentService:
             ) from error
         return StagedTrash(staged, stats)
 
+    @staticmethod
+    def _merge_directory_without_overwrite(source: Path, destination: Path) -> None:
+        """Merge directory contents without ever overwriting a file.
+
+        This is used only when rolling a staged trash cleanup back. Both trees
+        must be preserved even if new trash entries appeared while cleanup was
+        staged or filenames collide.
+        """
+        destination.mkdir(parents=True, exist_ok=True)
+        for item in list(source.iterdir()):
+            target = destination / item.name
+            if target.exists() and item.is_dir() and target.is_dir():
+                DocumentService._merge_directory_without_overwrite(item, target)
+                continue
+            if target.exists():
+                base = target
+                index = 2
+                while target.exists():
+                    target = base.with_name(f"{base.stem} ({index}){base.suffix}")
+                    index += 1
+            item.replace(target)
+        source.rmdir()
+
     def rollback_staged_trash(self, staged: StagedTrash | None) -> None:
         if staged is None or not staged.path.exists():
             return
+
+        # Keep any entries created after staging. Never rmtree the live trash
+        # before the old tree has been restored: a failed rename must not erase
+        # either generation of files.
+        holding = self.trash_dir.with_name(
+            f".{self.trash_dir.name}.rollback_{uuid.uuid4().hex}"
+        )
+        moved_current = False
         try:
             if self.trash_dir.exists():
-                shutil.rmtree(self.trash_dir)
-            staged.path.replace(self.trash_dir)
+                self.trash_dir.replace(holding)
+                moved_current = True
+            try:
+                staged.path.replace(self.trash_dir)
+            except OSError:
+                # Best-effort restoration of the newer tree if the old staged
+                # tree could not be moved back into place.
+                if moved_current and holding.exists() and not self.trash_dir.exists():
+                    holding.replace(self.trash_dir)
+                raise
+
+            if moved_current and holding.exists():
+                self._merge_directory_without_overwrite(holding, self.trash_dir)
         except OSError as error:
+            retained_at = f" Данные сохранены во временном каталоге: {holding}" if holding.exists() else ""
             raise DocumentStorageError(
-                f"Не удалось вернуть корзину после отката: {error}"
+                f"Не удалось вернуть корзину после отката: {error}.{retained_at}"
             ) from error
 
     def finalize_staged_trash(self, staged: StagedTrash | None) -> None:
@@ -473,10 +516,19 @@ class DocumentService:
     ) -> Path:
         source = self.normalize_path(trash_path)
         target = self.normalize_path(destination)
-        if target.exists():
-            return target
-        if not source.exists():
+        if not source.is_file():
             raise DocumentStorageError(f"Файл в корзине не найден: {source}")
+
+        # Never attach an existing, unrelated document to the restored request.
+        # Preserve both files by choosing a collision-free destination.
+        if target.exists():
+            base_target = target
+            index = 2
+            while target.exists():
+                target = base_target.with_name(
+                    f"{base_target.stem} ({index}){base_target.suffix}"
+                )
+                index += 1
 
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -572,6 +624,23 @@ class DocumentService:
 
     def delete_untracked_document(self, path: str | Path) -> DocumentDeleteResult:
         target = self.normalize_path(path)
+        try:
+            resolved_root = self.documents_dir.resolve(strict=False)
+            resolved_target = target.resolve(strict=False)
+            # Do not allow traversal, symlinks, or paths outside the application's
+            # document store to turn this method into an arbitrary-file delete.
+            resolved_target.relative_to(resolved_root)
+        except ValueError as error:
+            raise DocumentStorageError(
+                "Удаление разрешено только внутри каталога документов."
+            ) from error
+        except (OSError, RuntimeError) as error:
+            raise DocumentStorageError(
+                f"Не удалось проверить путь документа: {error}"
+            ) from error
+
+        if resolved_target == resolved_root:
+            raise DocumentStorageError("Нельзя удалить сам каталог документов.")
         if not target.exists():
             raise FileNotFoundError(target)
         target.unlink()

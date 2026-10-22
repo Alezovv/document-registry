@@ -12,8 +12,8 @@ class ShahmatkaWorker(QThread):
     succeeded = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, start_num: int, max_num: int, rows: int, file_path: str):
-        super().__init__()
+    def __init__(self, start_num: int, max_num: int, rows: int, file_path: str, parent=None):
+        super().__init__(parent)
         self.start_num = int(start_num)
         self.max_num = int(max_num)
         self.rows = max(1, int(rows))
@@ -202,7 +202,7 @@ class ShahmatkaPage(QWidget):
 
         self.generate_btn.setEnabled(False)
         self.generate_btn.setText("Формирование…")
-        worker = ShahmatkaWorker(start_num, max_num, rows, file_path)
+        worker = ShahmatkaWorker(start_num, max_num, rows, file_path, parent=self)
         self._generation_worker = worker
         worker.succeeded.connect(self._on_generation_succeeded)
         worker.failed.connect(self._on_generation_failed)
